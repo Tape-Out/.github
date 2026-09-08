@@ -154,6 +154,25 @@ jobs:
             exit 1
           fi
 
+      # 有 tb/ 的仓要真跑一遍。类型检查与调度门禁看的是「能不能建」，
+      # 这一步看的是「对不对」——核的译码错误就是这一步逮到的，前两道全过。
+      - name: 自检
+        if: steps.changed.outputs.kind != 'regs'
+        run: |
+          export PATH="$HOME/bsc-install/bin:$PATH"
+          N="$(basename "$GITHUB_REPOSITORY")"
+          if [ ! -f "$GITHUB_WORKSPACE/tb/mktb.py" ]; then
+            echo "没有 tb/mktb.py，跳过"; exit 0
+          fi
+          cd "$GITHUB_WORKSPACE/tb" && python3 mktb.py .
+          mkdir -p /tmp/sim
+          cd /tmp/ws
+          bsc +RTS -K512m -RTS -sim -u -bdir /tmp/sim -info-dir /tmp/sim \
+              -simdir /tmp/sim -p "$BSVPATH:$GITHUB_WORKSPACE/tb:+" \
+              -g mkTb "$GITHUB_WORKSPACE/tb/Tb.bsv"
+          bsc -sim -e mkTb -o /tmp/sim/run -bdir /tmp/sim -simdir /tmp/sim
+          /tmp/sim/run
+
       - name: 综合并回填面积
         if: |
           steps.changed.outputs.kind == 'flat' &&
