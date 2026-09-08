@@ -50,7 +50,9 @@ jobs:
           else
             echo "bsv=yes" >> "$GITHUB_OUTPUT"
           fi
-          if grep -q '^instances:' ip.yaml; then
+          if grep -q '^kind: library' ip.yaml; then
+            echo "kind=library" >> "$GITHUB_OUTPUT"
+          elif grep -q '^instances:' ip.yaml; then
             echo "kind=assembly" >> "$GITHUB_OUTPUT"
           elif grep -q 'verilog-flat' ip.yaml && [ -d bsv ]; then
             echo "kind=flat" >> "$GITHUB_OUTPUT"
@@ -124,6 +126,14 @@ jobs:
           cd /tmp/ws
           N="$(basename "$GITHUB_REPOSITORY")"
           case "${{ steps.changed.outputs.kind }}" in
+            library)
+              # 库包不生成东西，也不进地址图。能编过、导出的名字对得上就够。
+              for f in "$GITHUB_WORKSPACE"/bsv/*.bsv; do
+                bsc +RTS -K512m -RTS -u -bdir /tmp/b -info-dir /tmp/b \
+                    -p "/tmp/out:$(ls -d /tmp/ws/*/bsv 2>/dev/null | tr '\n' ':')+" "$f"
+              done
+              echo "库包检查完毕"
+              exit 0 ;;
             assembly)
               python3 -m xirang.cli build "$N" -o /tmp/asm --no-synth
               cp /tmp/asm/bsv/*.bsv /tmp/out/
@@ -144,7 +154,7 @@ jobs:
 
       # 只能靠仿真挂死才发现的隐式条件提升与调度成环，这里变成可读文本
       - name: 调度门禁
-        if: steps.changed.outputs.kind != 'regs'
+        if: steps.changed.outputs.kind != 'regs' && steps.changed.outputs.kind != 'library'
         run: |
           export PATH="$HOME/bsc-install/bin:$PATH"
           bsc +RTS -K512m -RTS -verilog -u -show-schedule -vdir /tmp/rtl -bdir /tmp/b2 -info-dir /tmp/b2 \
@@ -159,7 +169,7 @@ jobs:
       # 寄存器一致性：从 regmap.yaml 生成，验的是生成的译码、掩码与字段落位。
       # 这一道逮到过「只写字段把写进去的值读了回去」——类型检查与调度门禁全过。
       - name: 寄存器一致性
-        if: hashFiles('regmap.yaml') != ''
+        if: hashFiles('regmap.yaml') != '' && steps.changed.outputs.kind != 'library'
         run: |
           export PATH="$HOME/bsc-install/bin:$PATH"
           N="$(basename "$GITHUB_REPOSITORY")"
@@ -176,7 +186,7 @@ jobs:
           /tmp/rt/run
 
       - name: 自检
-        if: steps.changed.outputs.kind != 'regs'
+        if: steps.changed.outputs.kind != 'regs' && steps.changed.outputs.kind != 'library'
         run: |
           export PATH="$HOME/bsc-install/bin:$PATH"
           shopt -s nullglob
