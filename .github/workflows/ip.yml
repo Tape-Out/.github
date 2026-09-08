@@ -156,6 +156,25 @@ jobs:
 
       # 有 tb/ 的仓要真跑一遍。类型检查与调度门禁看的是「能不能建」，
       # 这一步看的是「对不对」——核的译码错误就是这一步逮到的，前两道全过。
+      # 寄存器一致性：从 regmap.yaml 生成，验的是生成的译码、掩码与字段落位。
+      # 这一道逮到过「只写字段把写进去的值读了回去」——类型检查与调度门禁全过。
+      - name: 寄存器一致性
+        if: hashFiles('regmap.yaml') != ''
+        run: |
+          export PATH="$HOME/bsc-install/bin:$PATH"
+          N="$(basename "$GITHUB_REPOSITORY")"
+          mkdir -p /tmp/rt
+          cd /tmp/ws && python3 -m xirang.cli gen "$N" -o /tmp/rt --tb
+          TB=$(ls /tmp/rt/bsv/*RegsTb.bsv 2>/dev/null || true)
+          if [ -z "$TB" ]; then
+            echo "寄存器全是数组或宽寄存器，本版测不了，跳过"; exit 0
+          fi
+          M="mk$(basename "$TB" .bsv)"
+          bsc +RTS -K512m -RTS -sim -u -bdir /tmp/rt -info-dir /tmp/rt \
+              -simdir /tmp/rt -p "/tmp/rt/bsv:$BSVPATH" -g "$M" "$TB"
+          bsc -sim -e "$M" -o /tmp/rt/run -bdir /tmp/rt -simdir /tmp/rt
+          /tmp/rt/run
+
       - name: 自检
         if: steps.changed.outputs.kind != 'regs'
         run: |
