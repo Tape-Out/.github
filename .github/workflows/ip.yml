@@ -88,6 +88,9 @@ jobs:
           print(' '.join((d.get('deps') or {}).keys()))"); do
             git clone --depth 1 "https://github.com/Tape-Out/$d" "/tmp/ws/$d" || true
           done
+          # 依赖的 bsv/ 要进 bsc 的搜索路径，否则 import 找不到
+          echo "BSVPATH=/tmp/out:$(ls -d /tmp/ws/*/bsv 2>/dev/null | tr '
+' ':')+"             >> "$GITHUB_ENV"
 
       - name: 清单与锁
         run: |
