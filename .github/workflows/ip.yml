@@ -99,6 +99,7 @@ jobs:
       - name: 生成并类型检查
         run: |
           export PATH="$HOME/bsc-install/bin:$PATH"
+          mkdir -p /tmp/out /tmp/b /tmp/b2 /tmp/rtl
           cd /tmp/ws
           N="$(basename "$GITHUB_REPOSITORY")"
           python3 -m xirang.cli wrap "$N" -o /tmp/out
