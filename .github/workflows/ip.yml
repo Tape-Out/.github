@@ -7,6 +7,8 @@ name: ip
 #   jobs:
 #     ip:
 #       uses: Tape-Out/.github/.github/workflows/ip.yml@main
+#       permissions:
+#         contents: write
 #
 # 门禁按代价从低到高排，前面的几乎免费、能挡住绝大多数问题：
 #   清单校验 -> 生成 -> 类型检查 -> 调度检查 -> （仅当 bsv/ 变了）综合与面积回填
@@ -15,7 +17,7 @@ on:
   workflow_call:
     inputs:
       bsc-ref:
-        description: 从上游源码编译 bsc 时用的标签
+        description: 取哪个 bsc 发布版
         type: string
         default: "2026.01"
       synth:
@@ -47,7 +49,6 @@ jobs:
             echo "bsv=yes" >> "$GITHUB_OUTPUT"
           fi
 
-      # bsc 从上游源码编译，跟得上上游且构建可复现。装一次缓存一年。
       - name: 取缓存的 bsc
         id: bsc-cache
         uses: actions/cache@v4
@@ -55,7 +56,7 @@ jobs:
           path: ~/bsc-install
           key: bsc-${{ inputs.bsc-ref }}-${{ runner.os }}
 
-      # 用官方发布的预编译包，钉住版本。从源码编译要二十多分钟且依赖脆弱，
+      # 用官方发布的预编译包。从源码编译要二十多分钟且依赖脆弱，
       # 而「跟得上上游」靠的是钉住哪个 release，不是自己编。
       - name: 取 bsc
         if: steps.bsc-cache.outputs.cache-hit != 'true'
@@ -88,31 +89,29 @@ jobs:
           print(' '.join((d.get('deps') or {}).keys()))"); do
             git clone --depth 1 "https://github.com/Tape-Out/$d" "/tmp/ws/$d" || true
           done
-          # 依赖的 bsv/ 要进 bsc 的搜索路径，否则 import 找不到
-          echo "BSVPATH=/tmp/out:$(ls -d /tmp/ws/*/bsv 2>/dev/null | tr '
-' ':')+"             >> "$GITHUB_ENV"
 
       - name: 清单与锁
         run: |
           cd /tmp/ws
-          python3 -m xirang.cli lint "$(basename "$GITHUB_REPOSITORY")" || true
+          python3 -m xirang.cli lint "$(basename "$GITHUB_REPOSITORY")"
 
+      # 依赖的 bsv/ 也要进 bsc 的搜索路径，否则 import 找不到
       - name: 生成并类型检查
         run: |
           export PATH="$HOME/bsc-install/bin:$PATH"
           cd /tmp/ws
           N="$(basename "$GITHUB_REPOSITORY")"
           python3 -m xirang.cli wrap "$N" -o /tmp/out
-          bsc -u -bdir /tmp/b -info-dir /tmp/b -p /tmp/out:"$GITHUB_WORKSPACE/bsv":+ \
-              /tmp/out/*Wrap.bsv
+          P="/tmp/out:$(ls -d /tmp/ws/*/bsv 2>/dev/null | tr '\n' ':')+"
+          echo "BSVPATH=$P" >> "$GITHUB_ENV"
+          bsc -u -bdir /tmp/b -info-dir /tmp/b -p "$P" /tmp/out/*Wrap.bsv
 
       # 只能靠仿真挂死才发现的隐式条件提升与调度成环，这里变成可读文本
       - name: 调度门禁
         run: |
           export PATH="$HOME/bsc-install/bin:$PATH"
-          N="$(basename "$GITHUB_REPOSITORY")"
           bsc -verilog -u -show-schedule -vdir /tmp/rtl -bdir /tmp/b2 -info-dir /tmp/b2 \
-              -p /tmp/out:"$GITHUB_WORKSPACE/bsv":+ /tmp/out/*Wrap.bsv 2>&1 | tee /tmp/sched.log
+              -p "$BSVPATH" /tmp/out/*Wrap.bsv 2>&1 | tee /tmp/sched.log
           if grep -qE '\(G0004\)|\(G0021\)|\(G0006\)|\(G0035\)' /tmp/sched.log; then
             echo "::error::调度有问题，见上面的 G 编号"
             exit 1
