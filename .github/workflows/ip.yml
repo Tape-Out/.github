@@ -31,6 +31,13 @@ on:
         description: 是否跑综合。默认只在 bsv/ 有改动时跑
         type: string
         default: auto
+      xirang-ref:
+        description: >-
+          取哪个版本的 xirang。默认跟着主线走，于是**工具要先于仓推送**：
+          仓的门禁克隆的是当时的工具，工具后推就会用旧的跑新的清单。
+          要固定就在这里钉一个标签。
+        type: string
+        default: main
 
 permissions:
   contents: write        # 面积要写进 area 分支
@@ -92,7 +99,8 @@ jobs:
       - name: 装 xirang
         run: |
           python3 -m pip install --quiet pyyaml
-          git clone --depth 1 https://github.com/Tape-Out/xirang /tmp/xirang
+          git clone --depth 1 --branch ${{ inputs.xirang-ref }} \
+            https://github.com/Tape-Out/xirang /tmp/xirang
           echo "PYTHONPATH=$(ls -d /tmp/xirang/packages/*/src | tr '\n' ':')" >> "$GITHUB_ENV"
 
       - name: 拉依赖
