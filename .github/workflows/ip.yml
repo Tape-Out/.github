@@ -11,9 +11,14 @@ name: ip
 #         contents: write
 #
 # 门禁按代价从低到高排，前面的几乎免费、能挡住绝大多数问题：
-#   清单校验 -> 生成 -> 类型检查 -> 调度检查 -> （仅当 bsv/ 变了）综合与面积回填
+#   清单校验 -> 生成 -> 类型检查 -> 矩阵测试 -> （仅当 bsv/ 变了）综合与面积回填
 #
-# 还没写 BSV 的仓也走前三道：寄存器图本身就该被检查，不必等实现。
+# 矩阵测试这一道是 xirang test：它把「调度门禁 + 寄存器一致性 + 各仓自己的
+# 行为测试」在整张配置矩阵上各跑一遍。默认配置过了不等于别的配置也过——
+# 门控写漏了的表现恰恰是「关掉了硬件还在」，只有单独关掉那一点看得出来。
+# 本地跑同一条命令即可复现，流水线里不再有自己的一套 grep。
+#
+# 还没写 BSV 的仓也走前几道：寄存器图本身就该被检查，不必等实现。
 
 on:
   workflow_call:
@@ -42,7 +47,7 @@ jobs:
         id: changed
         run: |
           if git rev-parse HEAD^ >/dev/null 2>&1; then
-            if git diff --name-only HEAD^ HEAD | grep -q '^bsv/\|^regmap\.yaml$\|^ip\.yaml$'; then
+            if git diff --name-only HEAD^ HEAD | grep -qE '^bsv/|^tb/|^regmap[.]yaml$|^ip[.]yaml$'; then
               echo "bsv=yes" >> "$GITHUB_OUTPUT"
             else
               echo "bsv=no" >> "$GITHUB_OUTPUT"
@@ -118,7 +123,9 @@ jobs:
           cd /tmp/ws
           python3 -m xirang.cli lint "$(basename "$GITHUB_REPOSITORY")"
 
-      # 依赖的 bsv/ 也要进 bsc 的搜索路径，否则 import 找不到
+      # 依赖的 bsv/ 也要进 bsc 的搜索路径，否则 import 找不到。
+      # bsv/ 装的是 Bluespec 源码，两种语法都在里面：.bsv 是 BSV，.bs 是 BH。
+      # bsc 一视同仁，import 也认不出区别，所以不分两个目录。
       - name: 生成并类型检查
         run: |
           export PATH="$HOME/bsc-install/bin:$PATH"
@@ -128,7 +135,8 @@ jobs:
           case "${{ steps.changed.outputs.kind }}" in
             library)
               # 库包不生成东西，也不进地址图。能编过、导出的名字对得上就够。
-              for f in "$GITHUB_WORKSPACE"/bsv/*.bsv; do
+              for f in "$GITHUB_WORKSPACE"/bsv/*.bsv "$GITHUB_WORKSPACE"/bsv/*.bs; do
+                [ -e "$f" ] || continue
                 bsc +RTS -K512m -RTS -u -bdir /tmp/b -info-dir /tmp/b \
                     -p "/tmp/out:$(ls -d /tmp/ws/*/bsv 2>/dev/null | tr '\n' ':')+" "$f"
               done
@@ -152,41 +160,37 @@ jobs:
           # -u 只收一个源文件，依赖靠它自己顺着 import 找
           bsc +RTS -K512m -RTS -u -bdir /tmp/b -info-dir /tmp/b -p "$P" "$TOP"
 
-      # 只能靠仿真挂死才发现的隐式条件提升与调度成环，这里变成可读文本
-      - name: 调度门禁
-        if: steps.changed.outputs.kind != 'regs' && steps.changed.outputs.kind != 'library'
+      # 一条命令三件事：调度门禁、寄存器一致性、各仓自己的行为测试，
+      # 在整张配置矩阵上各跑一遍。矩阵由 ip.yaml 的 test 段决定，默认 auto：
+      # 每个开关单独开一次、单独关一次，每个参数取两端，外加默认与两个极端。
+      # 只改了文档就只跑默认那一点。
+      - name: 矩阵测试
+        if: steps.changed.outputs.kind == 'flat' || steps.changed.outputs.kind == 'regs'
+        run: |
+          export PATH="$HOME/bsc-install/bin:$PATH"
+          cd /tmp/ws
+          N="$(basename "$GITHUB_REPOSITORY")"
+          if [ "${{ steps.changed.outputs.bsv }}" = "yes" ]; then
+            python3 -m xirang.cli test "$N" -o /tmp/mx
+          else
+            python3 -m xirang.cli test "$N" -o /tmp/mx --point Default
+          fi
+
+      # 装配没有自己的旋钮矩阵（它的矩阵是各实例矩阵的乘积，本版不做），
+      # 所以还是单点跑：调度门禁看「会不会卡」，自检看「对不对」。
+      - name: 装配的调度门禁
+        if: steps.changed.outputs.kind == 'assembly'
         run: |
           export PATH="$HOME/bsc-install/bin:$PATH"
           bsc +RTS -K512m -RTS -verilog -u -show-schedule -vdir /tmp/rtl -bdir /tmp/b2 -info-dir /tmp/b2 \
               -p "$BSVPATH" "$TOP" 2>&1 | tee /tmp/sched.log
-          if grep -qE '\(G0004\)|\(G0021\)|\(G0006\)|\(G0035\)' /tmp/sched.log; then
+          if grep -qE '[(]G0004[)]|[(]G0021[)]|[(]G0006[)]|[(]G0035[)]' /tmp/sched.log; then
             echo "::error::调度有问题，见上面的 G 编号"
             exit 1
           fi
 
-      # 有 tb/ 的仓要真跑一遍。类型检查与调度门禁看的是「能不能建」，
-      # 这一步看的是「对不对」——核的译码错误就是这一步逮到的，前两道全过。
-      # 寄存器一致性：从 regmap.yaml 生成，验的是生成的译码、掩码与字段落位。
-      # 这一道逮到过「只写字段把写进去的值读了回去」——类型检查与调度门禁全过。
-      - name: 寄存器一致性
-        if: hashFiles('regmap.yaml') != '' && steps.changed.outputs.kind != 'library'
-        run: |
-          export PATH="$HOME/bsc-install/bin:$PATH"
-          N="$(basename "$GITHUB_REPOSITORY")"
-          mkdir -p /tmp/rt
-          cd /tmp/ws && python3 -m xirang.cli gen "$N" -o /tmp/rt --tb
-          TB=$(ls /tmp/rt/bsv/*RegsTb.bsv 2>/dev/null || true)
-          if [ -z "$TB" ]; then
-            echo "寄存器全是数组或宽寄存器，本版测不了，跳过"; exit 0
-          fi
-          M="mk$(basename "$TB" .bsv)"
-          bsc +RTS -K512m -RTS -sim -u -bdir /tmp/rt -info-dir /tmp/rt \
-              -simdir /tmp/rt -p "/tmp/rt/bsv:$BSVPATH" -g "$M" "$TB"
-          bsc -sim -e "$M" -o /tmp/rt/run -bdir /tmp/rt -simdir /tmp/rt
-          /tmp/rt/run
-
-      - name: 自检
-        if: steps.changed.outputs.kind != 'regs' && steps.changed.outputs.kind != 'library'
+      - name: 装配的自检
+        if: steps.changed.outputs.kind == 'assembly'
         run: |
           export PATH="$HOME/bsc-install/bin:$PATH"
           shopt -s nullglob
