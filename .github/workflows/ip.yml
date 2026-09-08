@@ -1,0 +1,138 @@
+name: ip
+
+# 组织级可复用流水线。每个 IP 仓的 CI 压到六行：
+#
+#   name: ci
+#   on: [push, pull_request]
+#   jobs:
+#     ip:
+#       uses: Tape-Out/.github/.github/workflows/ip.yml@main
+#
+# 门禁按代价从低到高排，前面的几乎免费、能挡住绝大多数问题：
+#   清单校验 -> 生成 -> 类型检查 -> 调度检查 -> （仅当 bsv/ 变了）综合与面积回填
+
+on:
+  workflow_call:
+    inputs:
+      bsc-ref:
+        description: 从上游源码编译 bsc 时用的标签
+        type: string
+        default: "2026.01"
+      synth:
+        description: 是否跑综合。默认只在 bsv/ 有改动时跑
+        type: string
+        default: auto
+
+permissions:
+  contents: write        # 面积要写进 area 分支
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2      # 要能 diff 上一次提交，判断 bsv/ 动没动
+
+      - name: 这次改到 bsv/ 了吗
+        id: changed
+        run: |
+          if git rev-parse HEAD^ >/dev/null 2>&1; then
+            if git diff --name-only HEAD^ HEAD | grep -q '^bsv/\|^regmap\.yaml$\|^ip\.yaml$'; then
+              echo "bsv=yes" >> "$GITHUB_OUTPUT"
+            else
+              echo "bsv=no" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "bsv=yes" >> "$GITHUB_OUTPUT"
+          fi
+
+      # bsc 从上游源码编译，跟得上上游且构建可复现。装一次缓存一年。
+      - name: 取缓存的 bsc
+        id: bsc-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/bsc-install
+          key: bsc-${{ inputs.bsc-ref }}-${{ runner.os }}
+
+      - name: 编译 bsc
+        if: steps.bsc-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ghc cabal-install tcl-dev build-essential \
+                                      autoconf gperf flex bison
+          git clone --recursive --depth 1 -b "${{ inputs.bsc-ref }}" \
+              https://github.com/B-Lang-org/bsc /tmp/bsc
+          make -C /tmp/bsc -j"$(nproc)" install-src PREFIX="$HOME/bsc-install"
+
+      - name: 装 xirang
+        run: |
+          python3 -m pip install --quiet pyyaml
+          git clone --depth 1 https://github.com/Tape-Out/xirang /tmp/xirang
+          echo "PYTHONPATH=$(ls -d /tmp/xirang/packages/*/src | tr '\n' ':')" >> "$GITHUB_ENV"
+
+      - name: 拉依赖
+        run: |
+          mkdir -p /tmp/ws
+          ln -s "$GITHUB_WORKSPACE" "/tmp/ws/$(basename "$GITHUB_REPOSITORY")"
+          for d in $(python3 -c "
+          import yaml,sys
+          d=yaml.safe_load(open('ip.yaml'))
+          print(' '.join((d.get('deps') or {}).keys()))"); do
+            git clone --depth 1 "https://github.com/Tape-Out/$d" "/tmp/ws/$d" || true
+          done
+
+      - name: 清单与锁
+        run: |
+          cd /tmp/ws
+          python3 -m xirang.cli lint "$(basename "$GITHUB_REPOSITORY")" || true
+
+      - name: 生成并类型检查
+        run: |
+          export PATH="$HOME/bsc-install/bin:$PATH"
+          cd /tmp/ws
+          N="$(basename "$GITHUB_REPOSITORY")"
+          python3 -m xirang.cli wrap "$N" -o /tmp/out
+          bsc -u -bdir /tmp/b -info-dir /tmp/b -p /tmp/out:"$GITHUB_WORKSPACE/bsv":+ \
+              /tmp/out/*Wrap.bsv
+
+      # 只能靠仿真挂死才发现的隐式条件提升与调度成环，这里变成可读文本
+      - name: 调度门禁
+        run: |
+          export PATH="$HOME/bsc-install/bin:$PATH"
+          N="$(basename "$GITHUB_REPOSITORY")"
+          bsc -verilog -u -show-schedule -vdir /tmp/rtl -bdir /tmp/b2 -info-dir /tmp/b2 \
+              -p /tmp/out:"$GITHUB_WORKSPACE/bsv":+ /tmp/out/*Wrap.bsv 2>&1 | tee /tmp/sched.log
+          if grep -qE '\(G0004\)|\(G0021\)|\(G0006\)|\(G0035\)' /tmp/sched.log; then
+            echo "::error::调度有问题，见上面的 G 编号"
+            exit 1
+          fi
+
+      - name: 综合并回填面积
+        if: steps.changed.outputs.bsv == 'yes' && inputs.synth != 'never'
+        continue-on-error: true
+        run: |
+          curl -fsSL http://release.openecos.com/installers/ecc/latest/ecc-installer.sh \
+            | sh -s -- --with-toolchain
+          export PATH="$HOME/.local/bin:$HOME/bsc-install/bin:$PATH"
+          N="$(basename "$GITHUB_REPOSITORY")"
+          cd /tmp/ws && python3 -m xirang.cli build "$N" -o /tmp/syn || true
+          mkdir -p /tmp/area && cp -r /tmp/syn/*.json /tmp/area/ 2>/dev/null || true
+
+      # 机器人不签名（D54）。面积写 area 分支，人 review 之后再搬进主分支——
+      # 机器人永远碰不到主分支。
+      - name: 把面积写进 area 分支
+        if: steps.changed.outputs.bsv == 'yes' && github.event_name == 'push'
+        continue-on-error: true
+        run: |
+          git config user.name  "xirang-bot"
+          git config user.email "bot@tape-out.invalid"
+          git config commit.gpgsign false
+          git fetch origin area:area 2>/dev/null || git checkout --orphan area
+          git checkout area 2>/dev/null || true
+          git rm -rq --cached . 2>/dev/null || true
+          mkdir -p area && cp -r /tmp/area/* area/ 2>/dev/null || true
+          date -u +%FT%TZ > area/measured_at
+          git add area
+          git commit -m "area: ${GITHUB_SHA::8}" || exit 0
+          git push origin area
