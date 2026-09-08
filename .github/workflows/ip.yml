@@ -111,13 +111,16 @@ jobs:
           N="$(basename "$GITHUB_REPOSITORY")"
           if [ "${{ steps.changed.outputs.flat }}" = "yes" ]; then
             python3 -m xirang.cli wrap "$N" -o /tmp/out
+            TOP=$(ls /tmp/out/*Wrap.bsv)
           else
             python3 -m xirang.cli gen "$N" -o /tmp/gen
             cp /tmp/gen/bsv/*.bsv /tmp/out/
+            TOP=$(ls /tmp/out/*Regs.bsv)
           fi
           P="/tmp/out:$(ls -d /tmp/ws/*/bsv 2>/dev/null | tr '\n' ':')+"
           echo "BSVPATH=$P" >> "$GITHUB_ENV"
-          bsc -u -bdir /tmp/b -info-dir /tmp/b -p "$P" /tmp/out/*.bsv
+          # -u 只收一个源文件，依赖靠它自己顺着 import 找
+          bsc -u -bdir /tmp/b -info-dir /tmp/b -p "$P" "$TOP"
 
       # 只能靠仿真挂死才发现的隐式条件提升与调度成环，这里变成可读文本
       - name: 调度门禁
