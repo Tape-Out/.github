@@ -55,15 +55,22 @@ jobs:
           path: ~/bsc-install
           key: bsc-${{ inputs.bsc-ref }}-${{ runner.os }}
 
-      - name: 编译 bsc
+      # 用官方发布的预编译包，钉住版本。从源码编译要二十多分钟且依赖脆弱，
+      # 而「跟得上上游」靠的是钉住哪个 release，不是自己编。
+      - name: 取 bsc
         if: steps.bsc-cache.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ghc cabal-install tcl-dev build-essential \
-                                      autoconf gperf flex bison
-          git clone --recursive --depth 1 -b "${{ inputs.bsc-ref }}" \
-              https://github.com/B-Lang-org/bsc /tmp/bsc
-          make -C /tmp/bsc -j"$(nproc)" install-src PREFIX="$HOME/bsc-install"
+          sudo apt-get install -y -qq libtcl8.6 || sudo apt-get install -y -qq tcl
+          ver="${{ inputs.bsc-ref }}"
+          for d in ubuntu-24.04 ubuntu-22.04 debian-12.13; do
+            url="https://github.com/B-Lang-org/bsc/releases/download/$ver/bsc-$ver-$d.tar.gz"
+            if curl -fsSL "$url" -o /tmp/bsc.tgz; then echo "取到 $d"; break; fi
+          done
+          test -s /tmp/bsc.tgz || { echo "::error::没有可用的 bsc 发布包"; exit 1; }
+          mkdir -p "$HOME/bsc-install"
+          tar xzf /tmp/bsc.tgz -C "$HOME/bsc-install" --strip-components=1
+          "$HOME/bsc-install/bin/bsc" -v | head -2
 
       - name: 装 xirang
         run: |
