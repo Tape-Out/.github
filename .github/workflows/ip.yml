@@ -120,14 +120,14 @@ jobs:
           P="/tmp/out:$(ls -d /tmp/ws/*/bsv 2>/dev/null | tr '\n' ':')+"
           echo "BSVPATH=$P" >> "$GITHUB_ENV"
           # -u 只收一个源文件，依赖靠它自己顺着 import 找
-          bsc -u -bdir /tmp/b -info-dir /tmp/b -p "$P" "$TOP"
+          bsc +RTS -K512m -RTS -u -bdir /tmp/b -info-dir /tmp/b -p "$P" "$TOP"
 
       # 只能靠仿真挂死才发现的隐式条件提升与调度成环，这里变成可读文本
       - name: 调度门禁
         if: steps.changed.outputs.flat == 'yes'
         run: |
           export PATH="$HOME/bsc-install/bin:$PATH"
-          bsc -verilog -u -show-schedule -vdir /tmp/rtl -bdir /tmp/b2 -info-dir /tmp/b2 \
+          bsc +RTS -K512m -RTS -verilog -u -show-schedule -vdir /tmp/rtl -bdir /tmp/b2 -info-dir /tmp/b2 \
               -p "$BSVPATH" /tmp/out/*Wrap.bsv 2>&1 | tee /tmp/sched.log
           if grep -qE '\(G0004\)|\(G0021\)|\(G0006\)|\(G0035\)' /tmp/sched.log; then
             echo "::error::调度有问题，见上面的 G 编号"
