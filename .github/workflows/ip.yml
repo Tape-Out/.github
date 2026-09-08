@@ -1,9 +1,9 @@
 name: ip
 
-# 组织级可复用流水线。每个 IP 仓的 CI 压到六行：
+# 组织级可复用流水线。每个 IP 仓的 CI 压到八行：
 #
 #   name: ci
-#   on: [push, pull_request]
+#   on: [push, pull_request, workflow_dispatch]
 #   jobs:
 #     ip:
 #       uses: Tape-Out/.github/.github/workflows/ip.yml@main
@@ -12,6 +12,8 @@ name: ip
 #
 # 门禁按代价从低到高排，前面的几乎免费、能挡住绝大多数问题：
 #   清单校验 -> 生成 -> 类型检查 -> 调度检查 -> （仅当 bsv/ 变了）综合与面积回填
+#
+# 还没写 BSV 的仓也走前三道：寄存器图本身就该被检查，不必等实现。
 
 on:
   workflow_call:
@@ -47,6 +49,11 @@ jobs:
             fi
           else
             echo "bsv=yes" >> "$GITHUB_OUTPUT"
+          fi
+          if grep -q 'verilog-flat' ip.yaml && [ -d bsv ]; then
+            echo "flat=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "flat=no"  >> "$GITHUB_OUTPUT"
           fi
 
       - name: 取缓存的 bsc
@@ -102,13 +109,19 @@ jobs:
           mkdir -p /tmp/out /tmp/b /tmp/b2 /tmp/rtl
           cd /tmp/ws
           N="$(basename "$GITHUB_REPOSITORY")"
-          python3 -m xirang.cli wrap "$N" -o /tmp/out
+          if [ "${{ steps.changed.outputs.flat }}" = "yes" ]; then
+            python3 -m xirang.cli wrap "$N" -o /tmp/out
+          else
+            python3 -m xirang.cli gen "$N" -o /tmp/gen
+            cp /tmp/gen/bsv/*.bsv /tmp/out/
+          fi
           P="/tmp/out:$(ls -d /tmp/ws/*/bsv 2>/dev/null | tr '\n' ':')+"
           echo "BSVPATH=$P" >> "$GITHUB_ENV"
-          bsc -u -bdir /tmp/b -info-dir /tmp/b -p "$P" /tmp/out/*Wrap.bsv
+          bsc -u -bdir /tmp/b -info-dir /tmp/b -p "$P" /tmp/out/*.bsv
 
       # 只能靠仿真挂死才发现的隐式条件提升与调度成环，这里变成可读文本
       - name: 调度门禁
+        if: steps.changed.outputs.flat == 'yes'
         run: |
           export PATH="$HOME/bsc-install/bin:$PATH"
           bsc -verilog -u -show-schedule -vdir /tmp/rtl -bdir /tmp/b2 -info-dir /tmp/b2 \
@@ -119,14 +132,16 @@ jobs:
           fi
 
       - name: 综合并回填面积
-        if: steps.changed.outputs.bsv == 'yes' && inputs.synth != 'never'
+        if: |
+          steps.changed.outputs.flat == 'yes' &&
+          steps.changed.outputs.bsv == 'yes' && inputs.synth != 'never'
         continue-on-error: true
         run: |
           curl -fsSL http://release.openecos.com/installers/ecc/latest/ecc-installer.sh \
             | sh -s -- --with-toolchain
           export PATH="$HOME/.local/bin:$HOME/bsc-install/bin:$PATH"
           N="$(basename "$GITHUB_REPOSITORY")"
-          cd /tmp/ws && python3 -m xirang.cli build "$N" -o /tmp/syn || true
+          cd /tmp/ws && python3 -m xirang.cli build "$N" --neutral -o /tmp/syn || true
           mkdir -p /tmp/area && cp -r /tmp/syn/*.json /tmp/area/ 2>/dev/null || true
 
       # 机器人不签名（D54）。面积写 area 分支，人 review 之后再搬进主分支——
