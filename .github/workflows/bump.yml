@@ -110,19 +110,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           br="bump/lock-$(date +%Y%m%d)-${{ github.run_number }}"
-          git -c user.name="tape-out-bot" \
-              -c user.email="bot@users.noreply.github.com" \
-              checkout -b "$br"
-          git -c user.name="tape-out-bot" \
-              -c user.email="bot@users.noreply.github.com" \
-              commit -s -am "chore: re-lock after a dependency moved.
-
-The lock pins each dependency's version and the digest of what its generator emits.
-Half a month of upstream changes went by; this is what the resolver produces now.
-Raised by the scheduled version sweep, with xirang at $XR_SHA."
+          printf '%s\n' \
+            'chore: re-lock after a dependency moved.' \
+            '' \
+            "The lock pins each dependency's version and the digest of what its generator" \
+            'emits. Half a month of upstream changes went by; this is what the resolver' \
+            'produces now. Raised by the scheduled version sweep, with xirang at '"$XR_SHA"'.' \
+            > /tmp/msg
+          git config user.name tape-out-bot
+          git config user.email bot@users.noreply.github.com
+          git checkout -b "$br"
+          git commit -s -a -F /tmp/msg
           git push -u origin "$br"
           gh pr create --fill --base "${{ github.ref_name }}" --head "$br" || true
-
       - name: 摘要失效就记一笔
         if: steps.lint.outputs.stale == 'yes'
         run: |
