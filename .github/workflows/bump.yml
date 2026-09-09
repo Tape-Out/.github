@@ -1,0 +1,130 @@
+name: bump
+
+# 半月一次的版本巡检。组织级可复用流水线，每个仓的调用方压到十行：
+#
+#   name: bump
+#   on:
+#     schedule:
+#       - cron: "17 3 1,16 * *"
+#     workflow_dispatch:
+#   jobs:
+#     bump:
+#       uses: Tape-Out/.github/.github/workflows/bump.yml@main
+#       permissions:
+#         contents: write
+#         pull-requests: write
+#
+# 它查两件事，都是「时间一长就会悄悄不成立」的那种：
+#
+#   一、锁文件。装配把每个依赖的版本与生成物摘要钉在 xirang.lock 里。依赖发了新版、
+#       或者生成器改了输出，锁就旧了——而旧锁不会报错，只会让面积与对拍结果对着
+#       一份已经不存在的产物。
+#   二、价目表摘要。改了实现或改了生成器，面积就失效。这件事 ip.yml 只在推送时查，
+#       而依赖仓的改动不会触发本仓的推送，所以要有一个按时间来的。
+#
+# **机器人不签名，也不碰主分支**：有改动就推到一条侧分支并开 PR，人 review 之后
+# 再合。这两条是组织的铁律，不是这个流水线的选择。
+
+on:
+  workflow_call:
+    inputs:
+      xirang-ref:
+        description: 取哪个版本的 xirang。默认跟着主线走
+        type: string
+        default: main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 装 xirang
+        run: |
+          python3 -m pip install --quiet pyyaml
+          git clone --depth 1 --branch ${{ inputs.xirang-ref }} \
+            https://github.com/Tape-Out/xirang /tmp/xirang
+          echo "PYTHONPATH=$(ls -d /tmp/xirang/packages/*/src | tr '\n' ':')" >> "$GITHUB_ENV"
+          echo "XR_SHA=$(git -C /tmp/xirang rev-parse --short HEAD)" >> "$GITHUB_ENV"
+
+      - name: 拉依赖
+        run: |
+          mkdir -p /tmp/ws
+          ln -s "$GITHUB_WORKSPACE" "/tmp/ws/$(basename "$GITHUB_REPOSITORY")"
+          for d in $(python3 -c "
+          import yaml
+          d = yaml.safe_load(open('ip.yaml'))
+          n = set((d.get('deps') or {}).keys())
+          n |= {i['of'] for i in (d.get('instances') or [])}
+          print(' '.join(sorted(n)))"); do
+            git clone --depth 1 "https://github.com/Tape-Out/$d" "/tmp/ws/$d" || true
+          done
+          for y in /tmp/ws/*/ip.yaml; do
+            for d in $(python3 -c "
+          import yaml
+          print(' '.join(sorted((yaml.safe_load(open('$y')).get('deps') or {}).keys())))"); do
+              [ -d "/tmp/ws/$d" ] || git clone --depth 1 \
+                "https://github.com/Tape-Out/$d" "/tmp/ws/$d" || true
+            done
+          done
+
+      - name: 重解依赖、重钉锁
+        id: relock
+        run: |
+          cd /tmp/ws
+          name=$(basename "$GITHUB_REPOSITORY")
+          if grep -q '^instances:' "$name/ip.yaml"; then
+            python3 -m xirang.cli lock "$name" >/dev/null
+          else
+            echo "叶子 IP 不带锁，跳过重钉"
+          fi
+          cd "$GITHUB_WORKSPACE"
+          if git diff --quiet -- xirang.lock 2>/dev/null; then
+            echo "changed=no" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=yes" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 查摘要有没有失效
+        id: lint
+        run: |
+          cd /tmp/ws
+          name=$(basename "$GITHUB_REPOSITORY")
+          out=$(python3 -m xirang.cli lint "$name" 2>&1) || true
+          echo "$out"
+          echo "$out" >> "$GITHUB_STEP_SUMMARY"
+          if printf '%s' "$out" | grep -q '摘要不符'; then
+            echo "stale=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "stale=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      # 机器人不签名（没有 -S），也不碰主分支：推侧分支、开 PR，人 review 后再合。
+      - name: 锁变了就开 PR
+        if: steps.relock.outputs.changed == 'yes'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          br="bump/lock-$(date +%Y%m%d)-${{ github.run_number }}"
+          git -c user.name="tape-out-bot" \
+              -c user.email="bot@users.noreply.github.com" \
+              checkout -b "$br"
+          git -c user.name="tape-out-bot" \
+              -c user.email="bot@users.noreply.github.com" \
+              commit -s -am "chore: re-lock after a dependency moved.
+
+The lock pins each dependency's version and the digest of what its generator emits.
+Half a month of upstream changes went by; this is what the resolver produces now.
+Raised by the scheduled version sweep, with xirang at $XR_SHA."
+          git push -u origin "$br"
+          gh pr create --fill --base "${{ github.ref_name }}" --head "$br" || true
+
+      - name: 摘要失效就记一笔
+        if: steps.lint.outputs.stale == 'yes'
+        run: |
+          echo "::warning::价目表摘要已失效，面积要重测——见上面的 lint 输出"
+          exit 1
