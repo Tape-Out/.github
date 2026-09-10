@@ -218,24 +218,54 @@ jobs:
             /tmp/sim/run
           done
 
+      # 面积在公共 runner 上量不了：ICS55 的 PDK 要登录 ECOS Factory 才取得到，
+      # 而它既不能进公共仓也不该进缓存。所以这一步**先看有没有 PDK，没有就明说跳过**。
+      #
+      # 原来的写法是「装 ecc -> 综合 -> `|| true` -> 复制 `2>/dev/null || true`」，
+      # 于是 `pdk.root is not a directory: /home/heke/...` 这个必然失败被完整吞掉，
+      # area 分支每次照样提交一个只有时间戳的空目录，流水线照样绿。
+      # **上线至今一个面积数据都没产出过，而没有任何人看得出来。**
+      #
+      # 正确性现在由另一条门禁担：`xirang lint` 会在源码变了而价目表没重测时报错，
+      # 那条不需要 PDK。面积由本机 `xirang recal --apply` 测。
       - name: 综合并回填面积
+        id: synth
         if: |
           steps.changed.outputs.kind == 'flat' &&
           steps.changed.outputs.bsv == 'yes' && inputs.synth != 'never'
         continue-on-error: true
         run: |
+          if [ -z "$XR_PDK_ROOT" ] && \
+             [ -z "$(ls -d "$HOME"/.local/share/ecc/pdks/*/v* 2>/dev/null)" ]; then
+            echo "::notice::没有 PDK，跳过面积测量。价目表由本机 recal 测，摘要过期时 lint 会报"
+            echo "have=skip" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           curl -fsSL http://release.openecos.com/installers/ecc/latest/ecc-installer.sh \
             | sh -s -- --with-toolchain
           export PATH="$HOME/.local/bin:$HOME/bsc-install/bin:$PATH"
           N="$(basename "$GITHUB_REPOSITORY")"
-          cd /tmp/ws && python3 -m xirang.cli build "$N" --neutral -o /tmp/syn || true
-          mkdir -p /tmp/area && cp -r /tmp/syn/*.json /tmp/area/ 2>/dev/null || true
+          cd /tmp/ws && python3 -m xirang.cli build "$N" --neutral -o /tmp/syn
+          mkdir -p /tmp/area && cp /tmp/syn/*.json /tmp/area/
+          echo "have=$(ls /tmp/area/*.json | wc -l)" >> "$GITHUB_OUTPUT"
+
+      - name: 面积没测出来就说出来
+        if: |
+          steps.changed.outputs.kind == 'flat' &&
+          steps.changed.outputs.bsv == 'yes' && inputs.synth != 'never' &&
+          steps.synth.outputs.have == ''
+        run: echo "::warning::综合没有产出面积数据，area 分支这次不更新——见上一步的日志"
 
       # 机器人不签名（D54）。面积写 area 分支，人 review 之后再搬进主分支——
       # 机器人永远碰不到主分支。
+      #
+      # **没有数据就不提交**：原来无条件提交，于是分支里只有一个 measured_at，
+      # 看起来一直在更新，其实一个数都没有。
       - name: 把面积写进 area 分支
-        if: steps.changed.outputs.bsv == 'yes' && github.event_name == 'push'
-        continue-on-error: true
+        if: |
+          steps.changed.outputs.bsv == 'yes' && github.event_name == 'push' &&
+          steps.synth.outputs.have != '' && steps.synth.outputs.have != '0' &&
+          steps.synth.outputs.have != 'skip'
         run: |
           git config user.name  "xirang-bot"
           git config user.email "bot@tape-out.invalid"
@@ -243,7 +273,7 @@ jobs:
           git fetch origin area:area 2>/dev/null || git checkout --orphan area
           git checkout area 2>/dev/null || true
           git rm -rq --cached . 2>/dev/null || true
-          mkdir -p area && cp -r /tmp/area/* area/ 2>/dev/null || true
+          mkdir -p area && cp -r /tmp/area/* area/
           date -u +%FT%TZ > area/measured_at
           git add area
           git commit -m "area: ${GITHUB_SHA::8}" || exit 0
