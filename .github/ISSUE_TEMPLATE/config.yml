@@ -1,0 +1,9 @@
+blank_issues_enabled: true
+
+contact_links:
+  - name: Specifications
+    url: https://github.com/Tape-Out/spec
+    about: What ip.yaml and regmap.yaml mean, the contract shapes and the maturity levels.
+  - name: XiRang
+    url: https://github.com/Tape-Out/xirang
+    about: The package manager that generates, tests and prices every IP. Problems with the tool itself belong there.
