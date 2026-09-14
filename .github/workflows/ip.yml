@@ -142,12 +142,14 @@ jobs:
           N="$(basename "$GITHUB_REPOSITORY")"
           case "${{ steps.changed.outputs.kind }}" in
             library)
-              # 库包不生成东西，也不进地址图。能编过、导出的名字对得上就够。
+              # 库包不生成东西，也不进地址图。先类型检查，再跑 tb/ 里的行为测试：
+              # 地址图、写选通合并、总线绑定器都住在库包里，错了影响每一个 IP。
               for f in "$GITHUB_WORKSPACE"/bsv/*.bsv "$GITHUB_WORKSPACE"/bsv/*.bs; do
                 [ -e "$f" ] || continue
                 bsc +RTS -K512m -RTS -u -bdir /tmp/b -info-dir /tmp/b \
                     -p "/tmp/out:$(ls -d /tmp/ws/*/bsv 2>/dev/null | tr '\n' ':')+" "$f"
               done
+              cd /tmp/ws && python3 -m xirang.cli test "$N" -o /tmp/lib
               echo "库包检查完毕"
               exit 0 ;;
             assembly)
