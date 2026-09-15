@@ -97,7 +97,8 @@ jobs:
           out=$(python3 -m xirang.cli lint "$name" 2>&1) || true
           echo "$out"
           echo "$out" >> "$GITHUB_STEP_SUMMARY"
-          if printf '%s' "$out" | grep -q '摘要不符'; then
+          # 「摘要不符」只出在锁的校验里；叶子的价目表过期，lint 说的是后两句
+          if printf '%s' "$out" | grep -q '摘要不符\|价目表是对着另一份\|价目表没记生成产物摘要'; then
             echo "stale=yes" >> "$GITHUB_OUTPUT"
           else
             echo "stale=no" >> "$GITHUB_OUTPUT"
