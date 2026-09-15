@@ -44,6 +44,8 @@ permissions:
 
 jobs:
   gate:
+    # spec 分支只放规范原件溯源、area 分支只放面积数据，都没有 ip.yaml；各仓 ci.yml 不限分支，在这里拦
+    if: github.ref_name != 'spec' && github.ref_name != 'area'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
