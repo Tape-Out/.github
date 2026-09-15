@@ -162,9 +162,16 @@ jobs:
               python3 -m xirang.cli wrap "$N" -o /tmp/out
               TOP=$(ls /tmp/out/*Wrap.bsv) ;;
             *)
-              python3 -m xirang.cli gen "$N" -o /tmp/gen
-              cp /tmp/gen/bsv/*.bsv /tmp/out/
-              TOP=$(ls /tmp/out/*Regs.bsv) ;;
+              if [ -f "$GITHUB_WORKSPACE/regmap.yaml" ]; then
+                python3 -m xirang.cli gen "$N" -o /tmp/gen
+                cp /tmp/gen/bsv/*.bsv /tmp/out/
+                TOP=$(ls /tmp/out/*Regs.bsv)
+              else
+                # 既不挂总线也没有寄存器图的 IP（rvdbg 的 DMI 由 JTAG 进，不对外露控制口）：
+                # 没有生成物可编，直接编 emit 写的那个包。工作区软链在 /tmp/ws 里，路径不必再加
+                TOP="/tmp/ws/$N/bsv/$(grep -m1 '^  package:' "$GITHUB_WORKSPACE/ip.yaml" | awk '{print $2}').bsv"
+                [ -f "$TOP" ] || { echo "没有 regmap.yaml，也找不到 emit 写的包 $TOP"; exit 1; }
+              fi ;;
           esac
           echo "TOP=$TOP" >> "$GITHUB_ENV"
           P="/tmp/out:$(ls -d /tmp/ws/*/bsv 2>/dev/null | tr '\n' ':')+"
