@@ -12,7 +12,7 @@ jobs:
 ```
 
 Gates run cheapest first: manifest and lock, then generation, then the bsc type check,
-then the schedule check. Only a change under `bsv/`, `ip.yaml` or `regmap.yaml` triggers
+then the schedule check. Only a change under `hwsrc/`, `ip.yaml` or `regmap.yaml` triggers
 synthesis, because the price list is a fixed term plus a slope and only moves when the
 logic does.
 

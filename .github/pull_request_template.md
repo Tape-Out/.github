@@ -12,5 +12,5 @@
 
 - [ ] Every commit is signed off and signed (`git commit -s -S`).
 - [ ] `ran lint` and `ran test` pass for every package this touches.
-- [ ] If `bsv/`, `ip.yaml` or `regmap.yaml` changed, the price list was measured again with `ran recal <package> --apply`, or the description says who will measure it.
+- [ ] If `hwsrc/`, `ip.yaml` or `regmap.yaml` changed, the price list was measured again with `ran recal <package> --apply`, or the description says who will measure it.
 - [ ] No credentials, local paths or vendor PDK files are committed.

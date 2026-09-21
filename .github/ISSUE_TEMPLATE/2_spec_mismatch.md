@@ -16,7 +16,7 @@ assignees: ''
 
 ### What the IP does instead
 
-<!-- Point at the source line if you can, e.g. `bsv/Mmu.bsv:120`. -->
+<!-- Point at the source line if you can, e.g. `hwsrc/Mmu.bsv:120`. -->
 
 ### A check that would catch it
 

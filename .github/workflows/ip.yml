@@ -11,7 +11,7 @@ name: ip
 #         contents: write
 #
 # 门禁按代价从低到高排，前面的几乎免费、能挡住绝大多数问题：
-#   清单校验 -> 生成 -> 类型检查 -> 矩阵测试 -> （仅当 bsv/ 变了）综合与面积回填
+#   清单校验 -> 生成 -> 类型检查 -> 矩阵测试 -> （仅当 hwsrc/ 变了）综合与面积回填
 #
 # 矩阵测试这一道是 xirang test：它把「调度门禁 + 寄存器一致性 + 各仓自己的
 # 行为测试」在整张配置矩阵上各跑一遍。默认配置过了不等于别的配置也过——
@@ -28,7 +28,7 @@ on:
         type: string
         default: "2026.01"
       synth:
-        description: 是否跑综合。默认只在 bsv/ 有改动时跑
+        description: 是否跑综合。默认只在 hwsrc/ 有改动时跑
         type: string
         default: auto
       xirang-ref:
@@ -50,25 +50,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2      # 要能 diff 上一次提交，判断 bsv/ 动没动
+          fetch-depth: 2      # 要能 diff 上一次提交，判断 hwsrc/ 动没动
 
-      - name: 这次改到 bsv/ 了吗
+      - name: 这次改到 hwsrc/ 了吗
         id: changed
         run: |
           if git rev-parse HEAD^ >/dev/null 2>&1; then
-            if git diff --name-only HEAD^ HEAD | grep -qE '^bsv/|^tb/|^regmap[.]yaml$|^ip[.]yaml$'; then
-              echo "bsv=yes" >> "$GITHUB_OUTPUT"
+            if git diff --name-only HEAD^ HEAD | grep -qE '^hwsrc/|^swsrc/|^htest/|^stest/|^regmap[.]yaml$|^ip[.]yaml$'; then
+              echo "src=yes" >> "$GITHUB_OUTPUT"
             else
-              echo "bsv=no" >> "$GITHUB_OUTPUT"
+              echo "src=no" >> "$GITHUB_OUTPUT"
             fi
           else
-            echo "bsv=yes" >> "$GITHUB_OUTPUT"
+            echo "src=yes" >> "$GITHUB_OUTPUT"
           fi
           if grep -q '^kind: library' ip.yaml; then
             echo "kind=library" >> "$GITHUB_OUTPUT"
           elif grep -q '^instances:' ip.yaml; then
             echo "kind=assembly" >> "$GITHUB_OUTPUT"
-          elif grep -q 'verilog-flat' ip.yaml && [ -d bsv ]; then
+          elif grep -q 'verilog-flat' ip.yaml && [ -d hwsrc ]; then
             echo "kind=flat" >> "$GITHUB_OUTPUT"
           else
             echo "kind=regs"  >> "$GITHUB_OUTPUT"
@@ -133,8 +133,8 @@ jobs:
           cd /tmp/ws
           python3 -m xirang.cli lint "$(basename "$GITHUB_REPOSITORY")"
 
-      # 依赖的 bsv/ 也要进 bsc 的搜索路径，否则 import 找不到。
-      # bsv/ 装的是 Bluespec 源码，两种语法都在里面：.bsv 是 BSV，.bs 是 BH。
+      # 依赖的 hwsrc/ 也要进 bsc 的搜索路径，否则 import 找不到。
+      # hwsrc/ 装的是硬件源码，目录名不绑语言；当前两种语法都在里面：.bsv 是 BSV，.bs 是 BH。
       # bsc 一视同仁，import 也认不出区别，所以不分两个目录。
       - name: 生成并类型检查
         run: |
@@ -144,19 +144,19 @@ jobs:
           N="$(basename "$GITHUB_REPOSITORY")"
           case "${{ steps.changed.outputs.kind }}" in
             library)
-              # 库包不生成东西，也不进地址图。先类型检查，再跑 tb/ 里的行为测试：
+              # 库包不生成东西，也不进地址图。先类型检查，再跑 htest/ 里的行为测试：
               # 地址图、写选通合并、总线绑定器都住在库包里，错了影响每一个 IP。
-              for f in "$GITHUB_WORKSPACE"/bsv/*.bsv "$GITHUB_WORKSPACE"/bsv/*.bs; do
+              for f in "$GITHUB_WORKSPACE"/hwsrc/*.bsv "$GITHUB_WORKSPACE"/hwsrc/*.bs; do
                 [ -e "$f" ] || continue
                 bsc +RTS -K512m -RTS -u -bdir /tmp/b -info-dir /tmp/b \
-                    -p "/tmp/out:$(ls -d /tmp/ws/*/bsv 2>/dev/null | tr '\n' ':')+" "$f"
+                    -p "/tmp/out:$(ls -d /tmp/ws/*/hwsrc 2>/dev/null | tr '\n' ':')+" "$f"
               done
               cd /tmp/ws && python3 -m xirang.cli test "$N" -o /tmp/lib
               echo "库包检查完毕"
               exit 0 ;;
             assembly)
               python3 -m xirang.cli build "$N" -o /tmp/asm --no-synth
-              cp /tmp/asm/bsv/*.bsv /tmp/out/
+              cp /tmp/asm/hwsrc/*.bsv /tmp/out/
               TOP=$(ls /tmp/out/*Pkg.bsv) ;;
             flat)
               python3 -m xirang.cli wrap "$N" -o /tmp/out
@@ -164,17 +164,17 @@ jobs:
             *)
               if [ -f "$GITHUB_WORKSPACE/regmap.yaml" ]; then
                 python3 -m xirang.cli gen "$N" -o /tmp/gen
-                cp /tmp/gen/bsv/*.bsv /tmp/out/
+                cp /tmp/gen/hwsrc/*.bsv /tmp/out/
                 TOP=$(ls /tmp/out/*Regs.bsv)
               else
                 # 既不挂总线也没有寄存器图的 IP（rvdbg 的 DMI 由 JTAG 进，不对外露控制口）：
                 # 没有生成物可编，直接编 emit 写的那个包。工作区软链在 /tmp/ws 里，路径不必再加
-                TOP="/tmp/ws/$N/bsv/$(grep -m1 '^  package:' "$GITHUB_WORKSPACE/ip.yaml" | awk '{print $2}').bsv"
+                TOP="/tmp/ws/$N/hwsrc/$(grep -m1 '^  package:' "$GITHUB_WORKSPACE/ip.yaml" | awk '{print $2}').bsv"
                 [ -f "$TOP" ] || { echo "没有 regmap.yaml，也找不到 emit 写的包 $TOP"; exit 1; }
               fi ;;
           esac
           echo "TOP=$TOP" >> "$GITHUB_ENV"
-          P="/tmp/out:$(ls -d /tmp/ws/*/bsv 2>/dev/null | tr '\n' ':')+"
+          P="/tmp/out:$(ls -d /tmp/ws/*/hwsrc 2>/dev/null | tr '\n' ':')+"
           echo "BSVPATH=$P" >> "$GITHUB_ENV"
           # -u 只收一个源文件，依赖靠它自己顺着 import 找
           bsc +RTS -K512m -RTS -u -bdir /tmp/b -info-dir /tmp/b -p "$P" "$TOP"
@@ -189,7 +189,7 @@ jobs:
           export PATH="$HOME/bsc-install/bin:$PATH"
           cd /tmp/ws
           N="$(basename "$GITHUB_REPOSITORY")"
-          if [ "${{ steps.changed.outputs.bsv }}" = "yes" ]; then
+          if [ "${{ steps.changed.outputs.src }}" = "yes" ]; then
             python3 -m xirang.cli test "$N" -o /tmp/mx
           else
             python3 -m xirang.cli test "$N" -o /tmp/mx --point Default
@@ -213,17 +213,17 @@ jobs:
         run: |
           export PATH="$HOME/bsc-install/bin:$PATH"
           shopt -s nullglob
-          gens=("$GITHUB_WORKSPACE"/tb/mk*.py)
-          if [ ${#gens[@]} -eq 0 ]; then echo "没有 tb/，跳过"; exit 0; fi
-          cd "$GITHUB_WORKSPACE/tb"
+          gens=("$GITHUB_WORKSPACE"/htest/mk*.py)
+          if [ ${#gens[@]} -eq 0 ]; then echo "没有 htest/，跳过"; exit 0; fi
+          cd "$GITHUB_WORKSPACE/htest"
           for g in "${gens[@]}"; do python3 "$(basename "$g")" .; done
           mkdir -p /tmp/sim
           cd /tmp/ws
-          for f in "$GITHUB_WORKSPACE"/tb/*Tb.bsv; do
+          for f in "$GITHUB_WORKSPACE"/htest/*Tb.bsv; do
             M="mk$(basename "$f" .bsv)"
             echo "--- $M ---"
             bsc +RTS -K512m -RTS -sim -u -bdir /tmp/sim -info-dir /tmp/sim \
-                -simdir /tmp/sim -p "/tmp/out:$BSVPATH:$GITHUB_WORKSPACE/tb:+" \
+                -simdir /tmp/sim -p "/tmp/out:$BSVPATH:$GITHUB_WORKSPACE/htest:+" \
                 -g "$M" "$f"
             bsc -sim -e "$M" -o /tmp/sim/run -bdir /tmp/sim -simdir /tmp/sim
             /tmp/sim/run
@@ -243,7 +243,7 @@ jobs:
         id: synth
         if: |
           steps.changed.outputs.kind == 'flat' &&
-          steps.changed.outputs.bsv == 'yes' && inputs.synth != 'never'
+          steps.changed.outputs.src == 'yes' && inputs.synth != 'never'
         continue-on-error: true
         run: |
           if [ -z "$XR_PDK_ROOT" ] && \
@@ -263,7 +263,7 @@ jobs:
       - name: 面积没测出来就说出来
         if: |
           steps.changed.outputs.kind == 'flat' &&
-          steps.changed.outputs.bsv == 'yes' && inputs.synth != 'never' &&
+          steps.changed.outputs.src == 'yes' && inputs.synth != 'never' &&
           steps.synth.outputs.have == ''
         run: echo "::warning::综合没有产出面积数据，area 分支这次不更新——见上一步的日志"
 
@@ -274,7 +274,7 @@ jobs:
       # 看起来一直在更新，其实一个数都没有。
       - name: 把面积写进 area 分支
         if: |
-          steps.changed.outputs.bsv == 'yes' && github.event_name == 'push' &&
+          steps.changed.outputs.src == 'yes' && github.event_name == 'push' &&
           steps.synth.outputs.have != '' && steps.synth.outputs.have != '0' &&
           steps.synth.outputs.have != 'skip'
         run: |
