@@ -2,7 +2,7 @@ blank_issues_enabled: true
 
 contact_links:
   - name: Specifications
-    url: https://github.com/Tape-Out/spec
+    url: https://github.com/Tape-Out/xrspec
     about: What ip.yaml and regmap.yaml mean, the contract shapes and the maturity levels.
   - name: XiRang
     url: https://github.com/Tape-Out/xirang

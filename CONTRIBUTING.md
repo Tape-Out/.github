@@ -1,6 +1,6 @@
 # Contributing to Tape-Out
 
-Tape-Out is an open hardware IP library in Bluespec. Each IP lives in its own repository, describes itself in `ip.yaml` and `regmap.yaml` as defined in [`spec`](https://github.com/Tape-Out/spec), and is generated, tested and priced by [`xirang`](https://github.com/Tape-Out/xirang).
+Tape-Out is an open hardware IP library in Bluespec. Each IP lives in its own repository, describes itself in `ip.yaml` and `regmap.yaml` as defined in [`spec`](https://github.com/Tape-Out/xrspec), and is generated, tested and priced by [`xirang`](https://github.com/Tape-Out/xirang).
 
 ## Setting up
 
