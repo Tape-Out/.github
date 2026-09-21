@@ -52,7 +52,7 @@ jobs:
         with:
           fetch-depth: 2      # 要能 diff 上一次提交，判断 hwsrc/ 动没动
 
-      - name: 这次改到 hwsrc/ 了吗
+      - name: 这次改到源码了吗
         id: changed
         run: |
           if git rev-parse HEAD^ >/dev/null 2>&1; then
@@ -63,15 +63,6 @@ jobs:
             fi
           else
             echo "src=yes" >> "$GITHUB_OUTPUT"
-          fi
-          if grep -q '^kind: library' ip.yaml; then
-            echo "kind=library" >> "$GITHUB_OUTPUT"
-          elif grep -q '^instances:' ip.yaml; then
-            echo "kind=assembly" >> "$GITHUB_OUTPUT"
-          elif grep -q 'verilog-flat' ip.yaml && [ -d hwsrc ]; then
-            echo "kind=flat" >> "$GITHUB_OUTPUT"
-          else
-            echo "kind=regs"  >> "$GITHUB_OUTPUT"
           fi
 
       - name: 取缓存的 bsc
@@ -104,6 +95,24 @@ jobs:
           git clone --depth 1 --branch ${{ inputs.xirang-ref }} \
             https://github.com/Tape-Out/xirang /tmp/xirang
           echo "PYTHONPATH=$(ls -d /tmp/xirang/packages/*/src | tr '\n' ':')" >> "$GITHUB_ENV"
+
+      # 从前这里是四路 grep：kind: library 归库、有 instances 归装配、有 verilog-flat
+      # 归扁平、其余一律算「有寄存器图」。`rvdbg` 这种只出 BSV 的调试模块落进最后一档。
+      # 现在问工具：ip.yaml 写了 targets 就照写的来，没写就由工具按同一套规则推断。
+      - name: 这个包怎么构建
+        id: how
+        run: |
+          D=$(python3 -c "
+          import pathlib
+          from xirang_core.manifest import Pkg
+          p = Pkg(pathlib.Path('$GITHUB_WORKSPACE'))
+          print(' '.join(sorted({v['driver'] for v in p.targets().values()})))")
+          echo "drivers=$D" >> "$GITHUB_OUTPUT"
+          # 单值 kind 照旧按这个优先级，各步的 if 用它
+          for k in library assembly foreign flat regs bsv none; do
+            case " $D " in *" $k "*) echo "kind=$k" >> "$GITHUB_OUTPUT"; break;; esac
+          done
+          echo "目标：$D"
 
       - name: 拉依赖
         run: |
@@ -142,7 +151,7 @@ jobs:
           mkdir -p /tmp/out /tmp/b /tmp/b2 /tmp/rtl
           cd /tmp/ws
           N="$(basename "$GITHUB_REPOSITORY")"
-          case "${{ steps.changed.outputs.kind }}" in
+          case "${{ steps.how.outputs.kind }}" in
             library)
               # 库包不生成东西，也不进地址图。先类型检查，再跑 htest/ 里的行为测试：
               # 地址图、写选通合并、总线绑定器都住在库包里，错了影响每一个 IP。
@@ -161,6 +170,9 @@ jobs:
             flat)
               python3 -m xirang.cli wrap "$N" -o /tmp/out
               TOP=$(ls /tmp/out/*Wrap.bsv) ;;
+            foreign)
+              echo "黑盒：RTL 是别人的，我们不生成也不编译它"
+              exit 0 ;;
             *)
               if [ -f "$GITHUB_WORKSPACE/regmap.yaml" ]; then
                 python3 -m xirang.cli gen "$N" -o /tmp/gen
@@ -184,7 +196,11 @@ jobs:
       # 每个开关单独开一次、单独关一次，每个参数取两端，外加默认与两个极端。
       # 只改了文档就只跑默认那一点。
       - name: 矩阵测试
-        if: steps.changed.outputs.kind == 'flat' || steps.changed.outputs.kind == 'regs'
+        if: >-
+          steps.how.outputs.kind != 'library' &&
+          steps.how.outputs.kind != 'assembly' &&
+          steps.how.outputs.kind != 'foreign' &&
+          steps.how.outputs.kind != 'none'
         run: |
           export PATH="$HOME/bsc-install/bin:$PATH"
           cd /tmp/ws
@@ -198,7 +214,7 @@ jobs:
       # 装配没有自己的旋钮矩阵（它的矩阵是各实例矩阵的乘积，本版不做），
       # 所以还是单点跑：调度门禁看「会不会卡」，自检看「对不对」。
       - name: 装配的调度门禁
-        if: steps.changed.outputs.kind == 'assembly'
+        if: steps.how.outputs.kind == 'assembly'
         run: |
           export PATH="$HOME/bsc-install/bin:$PATH"
           bsc +RTS -K512m -RTS -verilog -u -show-schedule -vdir /tmp/rtl -bdir /tmp/b2 -info-dir /tmp/b2 \
@@ -209,7 +225,7 @@ jobs:
           fi
 
       - name: 装配的自检
-        if: steps.changed.outputs.kind == 'assembly'
+        if: steps.how.outputs.kind == 'assembly'
         run: |
           export PATH="$HOME/bsc-install/bin:$PATH"
           shopt -s nullglob
@@ -242,7 +258,7 @@ jobs:
       - name: 综合并回填面积
         id: synth
         if: |
-          steps.changed.outputs.kind == 'flat' &&
+          steps.how.outputs.kind == 'flat' &&
           steps.changed.outputs.src == 'yes' && inputs.synth != 'never'
         continue-on-error: true
         run: |
@@ -262,7 +278,7 @@ jobs:
 
       - name: 面积没测出来就说出来
         if: |
-          steps.changed.outputs.kind == 'flat' &&
+          steps.how.outputs.kind == 'flat' &&
           steps.changed.outputs.src == 'yes' && inputs.synth != 'never' &&
           steps.synth.outputs.have == ''
         run: echo "::warning::综合没有产出面积数据，area 分支这次不更新——见上一步的日志"
