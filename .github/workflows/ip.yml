@@ -51,6 +51,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 2      # 要能 diff 上一次提交，判断 hwsrc/ 动没动
+          submodules: recursive   # 黑盒仓把上游挂在 third_party/，不拉连清单都读不过
 
       - name: 这次改到源码了吗
         id: changed
@@ -114,6 +115,15 @@ jobs:
           done
           echo "目标：$D"
 
+      # 黑盒那一路要的两样：iverilog 跑上游自己的测试台，pyslang 把展开之后的
+      # 端口表拿回来核对声明。装不上 pyslang 只会少一道核对，不会假装核对过了
+      - name: 黑盒要的工具
+        if: steps.how.outputs.kind == 'foreign'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq iverilog
+          python3 -m pip install --quiet pyslang
+
       - name: 拉依赖
         run: |
           mkdir -p /tmp/ws
@@ -171,7 +181,7 @@ jobs:
               python3 -m xirang.cli wrap "$N" -o /tmp/out
               TOP=$(ls /tmp/out/*Wrap.bsv) ;;
             foreign)
-              echo "黑盒：RTL 是别人的，我们不生成也不编译它"
+              echo "黑盒：RTL 是别人的，我们不生成也不编译它；测试在下一步"
               exit 0 ;;
             *)
               if [ -f "$GITHUB_WORKSPACE/regmap.yaml" ]; then
