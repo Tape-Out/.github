@@ -1,11 +1,11 @@
 name: subs
 
-# 每月一次的上游巡检。组织级可复用流水线，每个挂了子模块的仓调用方压到十行：
+# 半月一次的上游巡检。组织级可复用流水线，每个挂了子模块的仓调用方压到十行：
 #
 #   name: subs
 #   on:
 #     schedule:
-#       - cron: "23 4 3 * *"
+#       - cron: "23 4 1,16 * *"
 #     workflow_dispatch:
 #   jobs:
 #     subs:
