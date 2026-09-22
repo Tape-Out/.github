@@ -26,6 +26,14 @@ name: subs
 on:
   workflow_call:
     inputs:
+      hold:
+        description: >-
+          按需求钉死、**不许跟**的子模块（空格分隔的路径）。有些上游之间的版本是
+          互相咬合的：NE16 的 Bender.yml 要 hwpe-stream 1.6.4 配 hci 1.0.6，跟到
+          最新会少掉 hci 还在驱动的端口。这种钉死是设计，不是疏忽，巡检不该每半月
+          报一次红。**钉住的要在仓里写明为什么**
+        type: string
+        default: ""
       xirang-ref:
         description: 取哪个版本的 xirang。默认跟着主线走
         type: string
@@ -57,7 +65,17 @@ jobs:
         id: bump
         if: steps.has.outputs.yes == '1'
         run: |
-          git submodule update --remote --recursive
+          HOLD="${{ inputs.hold }}"
+          if [ -n "$HOLD" ]; then
+            echo "按需求钉住、不跟的：$HOLD"
+            # 逐个跟，钉住的跳过。`--remote` 没有排除项，只能自己挑
+            for p in $(git config -f .gitmodules --get-regexp path | awk '{print $2}'); do
+              case " $HOLD " in *" $p "*) echo "  跳过 $p"; continue;; esac
+              git submodule update --remote -- "$p"
+            done
+          else
+            git submodule update --remote --recursive
+          fi
           if git diff --quiet; then
             echo "changed=no" >> "$GITHUB_OUTPUT"
             echo "上游没动"
