@@ -199,7 +199,6 @@ jobs:
         if: >-
           steps.how.outputs.kind != 'library' &&
           steps.how.outputs.kind != 'assembly' &&
-          steps.how.outputs.kind != 'foreign' &&
           steps.how.outputs.kind != 'none'
         run: |
           export PATH="$HOME/bsc-install/bin:$PATH"
