@@ -1,0 +1,107 @@
+name: subs
+
+# 每月一次的上游巡检。组织级可复用流水线，每个挂了子模块的仓调用方压到十行：
+#
+#   name: subs
+#   on:
+#     schedule:
+#       - cron: "23 4 3 * *"
+#     workflow_dispatch:
+#   jobs:
+#     subs:
+#       uses: Tape-Out/.github/.github/workflows/subs.yml@main
+#       permissions:
+#         contents: write
+#         pull-requests: write
+#
+# 黑盒仓把别人的 RTL 挂在 third_party/ 下当子模块。子模块钉的是一个提交号，
+# 上游往前走了它不会自己跟——**不跟不会报错，只会让我们一直对着一份越来越旧的
+# 源码量面积、跑测试**。所以要有一条按时间来的。
+#
+# **跟之前先验**：拉到上游最新之后跑一遍 xirang test。上游改了端口、改了参数、
+# 或者行为变了，这一步就红——那正是我们要知道的事。盲目跟进比不跟更糟。
+#
+# **机器人不签名，也不碰主分支**：有改动就推侧分支开 PR，人 review 后再合。
+
+on:
+  workflow_call:
+    inputs:
+      xirang-ref:
+        description: 取哪个版本的 xirang。默认跟着主线走
+        type: string
+        default: main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  subs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: 有子模块吗
+        id: has
+        run: |
+          if [ -f .gitmodules ]; then
+            echo "yes=1" >> "$GITHUB_OUTPUT"
+            git submodule status | sed 's/^/  /'
+          else
+            echo "这个仓没有子模块，没什么可巡的"
+          fi
+
+      - name: 跟到上游最新
+        id: bump
+        if: steps.has.outputs.yes == '1'
+        run: |
+          git submodule update --remote --recursive
+          if git diff --quiet; then
+            echo "changed=no" >> "$GITHUB_OUTPUT"
+            echo "上游没动"
+          else
+            echo "changed=yes" >> "$GITHUB_OUTPUT"
+            git submodule status | sed 's/^/  /'
+            git diff --submodule=log | head -40
+          fi
+
+      - name: 装工具
+        if: steps.bump.outputs.changed == 'yes'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq iverilog
+          python3 -m pip install --quiet pyyaml pyslang
+          git clone --depth 1 --branch ${{ inputs.xirang-ref }} \
+            https://github.com/Tape-Out/xirang /tmp/xirang
+          echo "PYTHONPATH=$(ls -d /tmp/xirang/packages/*/src | tr '\n' ':')" >> "$GITHUB_ENV"
+
+      # 跟之前先验：上游改了端口、改了参数、行为变了，都该在这里红出来
+      - name: 跟完还过得去吗
+        if: steps.bump.outputs.changed == 'yes'
+        run: |
+          mkdir -p /tmp/ws
+          ln -s "$GITHUB_WORKSPACE" "/tmp/ws/$(basename "$GITHUB_REPOSITORY")"
+          cd /tmp/ws
+          python3 -m xirang.cli test "$(basename "$GITHUB_REPOSITORY")"
+
+      - name: 开 PR
+        if: steps.bump.outputs.changed == 'yes'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          br="subs/bump-$(date +%Y%m)-${{ github.run_number }}"
+          printf '%s\n' \
+            'chore: follow the upstream submodules.' \
+            '' \
+            'The monthly upstream sweep moved the pinned commits forward. The matrix and' \
+            "the black box receipt both passed against the new sources, so what changed" \
+            'is upstream, not us.' \
+            > /tmp/msg
+          git config user.name tape-out-bot
+          git config user.email bot@users.noreply.github.com
+          git checkout -b "$br"
+          git commit -s -a -F /tmp/msg
+          git push -u origin "$br"
+          gh pr create --fill --base "${{ github.ref_name }}" --head "$br" || true
