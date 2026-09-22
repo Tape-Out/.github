@@ -31,6 +31,13 @@ on:
         description: 是否跑综合。默认只在 hwsrc/ 有改动时跑
         type: string
         default: auto
+      nested-subs:
+        description: >-
+          上游自己还挂着一堆子模块时，只取这里列出的几个（空格分隔，相对上游仓根）。
+          留空照旧递归全取。CVA6 递归一次会把 core-v-verif 与 riscv-isa-manual
+          一起拖下来，而清单里一个文件都用不到
+        type: string
+        default: ""
       xirang-ref:
         description: >-
           取哪个版本的 xirang。默认跟着主线走，于是**工具要先于仓推送**：
@@ -51,7 +58,15 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 2      # 要能 diff 上一次提交，判断 hwsrc/ 动没动
-          submodules: recursive   # 黑盒仓把上游挂在 third_party/，不拉连清单都读不过
+          # 黑盒仓把上游挂在 third_party/，不拉连清单都读不过
+          submodules: ${{ inputs.nested-subs == '' && 'recursive' || true }}
+
+      - name: 取上游自己的子模块（只取用得到的）
+        if: inputs.nested-subs != ''
+        run: |
+          for d in third_party/*/; do
+            git -C "$d" submodule update --init --recursive --depth 1 -- ${{ inputs.nested-subs }}
+          done
 
       - name: 这次改到源码了吗
         id: changed
