@@ -2,7 +2,7 @@
 
 An open hardware IP library in Bluespec, assembled by the XiRang package manager.
 
-Every IP is a repository of the same shape: an `ip.yaml` that names its knobs, contracts and measured area, a `regmap.yaml` for its registers, Bluespec sources, and behaviour tests that run over its whole configuration matrix. [`xirang`](https://github.com/Tape-Out/xirang) resolves, generates, tests and prices them, and [`spec`](https://github.com/Tape-Out/xrspec) says what the files mean.
+Every IP is a repository of the same shape: an `ip.yaml` that names its knobs, contracts and measured area, a `regmap.yaml` for its registers, Bluespec sources, and behaviour tests that run over its whole configuration matrix. [`xirang`](https://github.com/Tape-Out/xirang) resolves, generates, tests and prices them, and [`xrspec`](https://github.com/Tape-Out/xrspec) says what the files mean.
 
 | Layer | Repositories |
 |:--:|:--|
