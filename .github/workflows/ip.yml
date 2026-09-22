@@ -235,6 +235,26 @@ jobs:
             python3 -m xirang.cli test "$N" -o /tmp/mx --point Default
           fi
 
+      # 门禁过了还要说得清「这一版是什么」。三张表都读同一份解出来的数据，
+      # 贴进 job summary：审 PR 的人不必把仓拉下来才看得见端点、依赖与引脚。
+      # 摘要失效时 diffsigs 直接说是生成器变了还是源码变了，省掉人去 diff。
+      - name: 这一版是什么
+        if: always() && steps.how.outputs.kind != 'none'
+        run: |
+          cd /tmp/ws
+          N="$(basename "$GITHUB_REPOSITORY")"
+          S="$GITHUB_STEP_SUMMARY"
+          say() { echo "### $1" >> "$S"; echo '```' >> "$S"; shift; "$@" >> "$S" 2>&1 || true; echo '```' >> "$S"; }
+          say "包" python3 -m xirang.cli show "$N"
+          if [ "${{ steps.how.outputs.kind }}" != "library" ]; then
+            say "依赖" python3 -m xirang.cli inspect "$N" --deps
+            say "引脚" python3 -m xirang.cli inspect "$N" --pins
+          fi
+          # 价目表失效时，说清是哪一部分变了
+          if python3 -m xirang.cli diffsigs "$N" 2>/dev/null | grep -q "来自生成器\|源码动了"; then
+            say "价目表摘要" python3 -m xirang.cli diffsigs "$N"
+          fi
+
       # 装配没有自己的旋钮矩阵（它的矩阵是各实例矩阵的乘积，本版不做），
       # 所以还是单点跑：调度门禁看「会不会卡」，自检看「对不对」。
       - name: 装配的调度门禁
