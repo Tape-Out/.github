@@ -55,7 +55,7 @@ jobs:
     if: github.ref_name != 'spec' && github.ref_name != 'area'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 2      # 要能 diff 上一次提交，判断 hwsrc/ 动没动
           # 黑盒仓把上游挂在 third_party/，不拉连清单都读不过
@@ -83,7 +83,7 @@ jobs:
 
       - name: 取缓存的 bsc
         id: bsc-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/bsc-install
           key: bsc-${{ inputs.bsc-ref }}-${{ runner.os }}
