@@ -57,6 +57,10 @@ on:
         description: 要 sv2v 就写发布版本（如 v0.0.13），取官方发布的二进制；空着不装
         type: string
         default: ""
+      verilator:
+        description: 要比 apt 那版（Ubuntu 24.04 是 5.020）新的 Verilator 就写标签（如 v5.032），从源码编一次并缓存；空着不装
+        type: string
+        default: ""
 
 permissions:
   contents: write        # 面积要写进 area 分支
@@ -152,6 +156,37 @@ jobs:
           unzip -q -o /tmp/sv2v.zip -d "$HOME/sv2v"
           echo "$HOME/sv2v/sv2v-Linux" >> "$GITHUB_PATH"
           "$HOME/sv2v/sv2v-Linux/sv2v" --version
+
+      - name: 托管机镜像
+        id: img
+        if: inputs.verilator != ''
+        run: echo "id=$ImageOS" >> "$GITHUB_OUTPUT"
+
+      - name: 取缓存的 Verilator
+        id: vl-cache
+        if: inputs.verilator != ''
+        uses: actions/cache@v6
+        with:
+          path: ~/verilator
+          # 编出来的链接了系统的 libc，托管机换版本就不能再用
+          key: verilator-${{ inputs.verilator }}-${{ steps.img.outputs.id }}
+
+      # Verilator 不出预编译包。apt 那版不够用的上游（VeeR EL2 的测试台 force 自己的输入口，5.020 不支持）钉标签自己编
+      - name: Verilator
+        if: inputs.verilator != ''
+        run: |
+          if [ "${{ steps.vl-cache.outputs.cache-hit }}" != true ]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq help2man flex bison libfl-dev zlib1g-dev autoconf
+            git clone --depth 1 --branch ${{ inputs.verilator }} https://github.com/verilator/verilator /tmp/verilator
+            cd /tmp/verilator
+            autoconf
+            ./configure --prefix="$HOME/verilator"
+            make -j"$(nproc)"
+            make install
+          fi
+          echo "$HOME/verilator/bin" >> "$GITHUB_PATH"
+          "$HOME/verilator/bin/verilator" --version
 
       # 从前这里是四路 grep：kind: library 归库、有 instances 归装配、有 verilog-flat
       # 归扁平、其余一律算「有寄存器图」。`rvdbg` 这种只出 BSV 的调试模块落进最后一档。
