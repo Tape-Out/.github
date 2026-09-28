@@ -162,6 +162,19 @@ jobs:
             done
           done
 
+      # 生成器类的上游（清单写了 setup）：源码要先跑它自己的生成器才有。
+      # 跑的是清单里写明的那条任务，工具本身不代跑
+      - name: 黑盒的生成步骤
+        if: steps.how.outputs.kind == 'foreign'
+        run: |
+          cd /tmp/ws
+          N="$(basename "$GITHUB_REPOSITORY")"
+          S=$(python3 -c "
+          import pathlib
+          from xirang_core.manifest import Pkg
+          print(Pkg(pathlib.Path('$GITHUB_WORKSPACE')).foreign_emit().get('setup') or '')")
+          if [ -n "$S" ]; then python3 -m xirang.cli run "$N" "$S"; else echo "清单没写 setup"; fi
+
       - name: 清单与锁
         run: |
           cd /tmp/ws
