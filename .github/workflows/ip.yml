@@ -49,6 +49,14 @@ on:
         description: 各仓测试要的额外系统包（空格分隔），如 riscv-tests 要的 gcc-riscv64-unknown-elf
         type: string
         default: ""
+      pip:
+        description: 各仓测试要的额外 Python 包（空格分隔），如上游 cocotb 测试要的 cocotb==1.9.2
+        type: string
+        default: ""
+      sv2v:
+        description: 要 sv2v 就写发布版本（如 v0.0.13），取官方发布的二进制；空着不装
+        type: string
+        default: ""
 
 permissions:
   contents: write        # 面积要写进 area 分支
@@ -126,6 +134,20 @@ jobs:
           git clone --depth 1 --branch ${{ inputs.xirang-ref }} \
             https://github.com/Tape-Out/xirang /tmp/xirang
           echo "PYTHONPATH=$(ls -d /tmp/xirang/packages/*/src | tr '\n' ':')" >> "$GITHUB_ENV"
+
+      - name: 额外的 Python 包
+        if: inputs.pip != ''
+        run: python3 -m pip install --quiet ${{ inputs.pip }}
+
+      # Ubuntu 没有 sv2v 的包；SystemVerilog 上游常先过它再给 iverilog
+      - name: sv2v
+        if: inputs.sv2v != ''
+        run: |
+          curl -fsSL -o /tmp/sv2v.zip \
+            "https://github.com/zachjs/sv2v/releases/download/${{ inputs.sv2v }}/sv2v-Linux.zip"
+          unzip -q -o /tmp/sv2v.zip -d "$HOME/sv2v"
+          echo "$HOME/sv2v/sv2v-Linux" >> "$GITHUB_PATH"
+          "$HOME/sv2v/sv2v-Linux/sv2v" --version
 
       # 从前这里是四路 grep：kind: library 归库、有 instances 归装配、有 verilog-flat
       # 归扁平、其余一律算「有寄存器图」。`rvdbg` 这种只出 BSV 的调试模块落进最后一档。
