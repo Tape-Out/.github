@@ -247,11 +247,11 @@ jobs:
       # 一条命令三件事：调度门禁、寄存器一致性、各仓自己的行为测试，
       # 在整张配置矩阵上各跑一遍。矩阵由 ip.yaml 的 test 段决定，默认 auto：
       # 每个开关单独开一次、单独关一次，每个参数取两端，外加默认与两个极端。
+      # 装配照 test.axes 扫实例的旋钮，没写就只有默认那一点。
       # 只改了文档就只跑默认那一点。
       - name: 矩阵测试
         if: >-
           steps.how.outputs.kind != 'library' &&
-          steps.how.outputs.kind != 'assembly' &&
           steps.how.outputs.kind != 'none'
         run: |
           export PATH="$HOME/bsc-install/bin:$PATH"
@@ -282,40 +282,6 @@ jobs:
           if python3 -m xirang.cli diffsigs "$N" 2>/dev/null | grep -q "来自生成器\|源码动了"; then
             say "价目表摘要" python3 -m xirang.cli diffsigs "$N"
           fi
-
-      # 装配没有自己的旋钮矩阵（它的矩阵是各实例矩阵的乘积，本版不做），
-      # 所以还是单点跑：调度门禁看「会不会卡」，自检看「对不对」。
-      - name: 装配的调度门禁
-        if: steps.how.outputs.kind == 'assembly'
-        run: |
-          export PATH="$HOME/bsc-install/bin:$PATH"
-          bsc +RTS -K512m -RTS -verilog -u -show-schedule -vdir /tmp/rtl -bdir /tmp/b2 -info-dir /tmp/b2 \
-              -p "$BSVPATH" "$TOP" 2>&1 | tee /tmp/sched.log
-          if grep -qE '[(]G0004[)]|[(]G0021[)]|[(]G0006[)]|[(]G0035[)]' /tmp/sched.log; then
-            echo "::error::调度有问题，见上面的 G 编号"
-            exit 1
-          fi
-
-      - name: 装配的自检
-        if: steps.how.outputs.kind == 'assembly'
-        run: |
-          export PATH="$HOME/bsc-install/bin:$PATH"
-          shopt -s nullglob
-          gens=("$GITHUB_WORKSPACE"/htest/mk*.py)
-          if [ ${#gens[@]} -eq 0 ]; then echo "没有 htest/，跳过"; exit 0; fi
-          cd "$GITHUB_WORKSPACE/htest"
-          for g in "${gens[@]}"; do python3 "$(basename "$g")" .; done
-          mkdir -p /tmp/sim
-          cd /tmp/ws
-          for f in "$GITHUB_WORKSPACE"/htest/*Tb.bsv; do
-            M="mk$(basename "$f" .bsv)"
-            echo "--- $M ---"
-            bsc +RTS -K512m -RTS -sim -u -bdir /tmp/sim -info-dir /tmp/sim \
-                -simdir /tmp/sim -p "/tmp/out:$BSVPATH:$GITHUB_WORKSPACE/htest:+" \
-                -g "$M" "$f"
-            bsc -sim -e "$M" -o /tmp/sim/run -bdir /tmp/sim -simdir /tmp/sim
-            /tmp/sim/run
-          done
 
       # 面积在公共 runner 上量不了：ICS55 的 PDK 要登录 ECOS Factory 才取得到，
       # 而它既不能进公共仓也不该进缓存。所以这一步**先看有没有 PDK，没有就明说跳过**。
