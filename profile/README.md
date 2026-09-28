@@ -9,7 +9,7 @@ Every IP is a repository of the same shape: an `ip.yaml` that names its knobs, c
 | Tools and specifications | `xirang` · `xrspec` · `xrskel` · `index` · `pdk` · `.github` |
 | Contracts and buses | `hwcore` · `amba` · `tilelink` · `wishbone` · `bridge` |
 | Processors and accelerators | `rvcore` · `lacore` · `xxcore` · `aacore` · `cache` · `yolo` · `npu` |
-| Upstream cores, as black boxes | `picorv32` · `serv` · `hazard3` · `kianriscv` · `ibex` · `cv32e40p` · `cva6` · `ao486` · `ne16` · `open-la500` · `nop-plus` · `vortex` · `verigpu` · `miaow` · `tiny-gpu` · `xiangshan` |
+| Upstream cores, as black boxes | `picorv32` · `serv` · `hazard3` · `kianriscv` · `cores-veer-el2` · `ibex` · `cv32e40p` · `cva6` · `ao486` · `ne16` · `open-la500` · `nop-plus` · `vortex` · `verigpu` · `miaow` · `tiny-gpu` · `xiangshan` |
 | Interrupts, timers and system | `aclint` · `plic` · `imsic` · `rcu` · `pinmux` · `mbox` · `dma` · `pmu` |
 | Peripherals | `uart` · `spi` · `i2c` · `gpio` · `timer` · `wdt` · `rtc` · `pwm` · `sram` · `rom` and more |
 | Networking | `emac` · `eswitch` · `erouter` |
