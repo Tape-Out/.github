@@ -34,8 +34,8 @@ on:
       nested-subs:
         description: >-
           上游自己还挂着一堆子模块时，只取这里列出的几个（空格分隔，相对上游仓根）。
-          留空照旧递归全取。CVA6 递归一次会把 core-v-verif 与 riscv-isa-manual
-          一起拖下来，而清单里一个文件都用不到
+          留空照旧递归全取；写 none 就一个也不取。CVA6 递归一次会把 core-v-verif 与
+          riscv-isa-manual 一起拖下来，而清单里一个文件都用不到
         type: string
         default: ""
       xirang-ref:
