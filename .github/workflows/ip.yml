@@ -61,6 +61,10 @@ on:
         description: 要比 apt 那版（Ubuntu 24.04 是 5.020）新的 Verilator 就写标签（如 v5.032），从源码编一次并缓存；空着不装
         type: string
         default: ""
+      bender:
+        description: 要 bender 就写发布版本（如 v0.32.1），取官方发布的二进制；空着不装
+        type: string
+        default: ""
 
 permissions:
   contents: write        # 面积要写进 area 分支
@@ -156,6 +160,17 @@ jobs:
           unzip -q -o /tmp/sv2v.zip -d "$HOME/sv2v"
           echo "$HOME/sv2v/sv2v-Linux" >> "$GITHUB_PATH"
           "$HOME/sv2v/sv2v-Linux/sv2v" --version
+
+      # PULP 系的上游用它管依赖、出文件表
+      - name: bender
+        if: inputs.bender != ''
+        run: |
+          curl -fsSL -o /tmp/bender.txz \
+            "https://github.com/pulp-platform/bender/releases/download/${{ inputs.bender }}/bender-x86_64-unknown-linux-gnu.tar.xz"
+          mkdir -p "$HOME/bender"
+          tar xJf /tmp/bender.txz -C "$HOME/bender" --strip-components=1
+          echo "$HOME/bender" >> "$GITHUB_PATH"
+          "$HOME/bender/bender" --version
 
       - name: 托管机镜像
         id: img
