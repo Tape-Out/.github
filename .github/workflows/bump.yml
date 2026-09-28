@@ -43,6 +43,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # xirang 要 3.14；托管机自带 3.12，连 PurePath.full_match 都没有
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+
       - name: 装 xirang
         run: |
           python3 -m pip install --quiet pyyaml

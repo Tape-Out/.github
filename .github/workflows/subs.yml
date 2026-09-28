@@ -85,6 +85,12 @@ jobs:
             git diff --submodule=log | head -40
           fi
 
+      # xirang 要 3.14；托管机自带 3.12，连 PurePath.full_match 都没有
+      - uses: actions/setup-python@v7
+        if: steps.bump.outputs.changed == 'yes'
+        with:
+          python-version: "3.14"
+
       - name: 装工具
         if: steps.bump.outputs.changed == 'yes'
         run: |
