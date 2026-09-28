@@ -76,8 +76,12 @@ jobs:
       - name: 取上游自己的子模块（只取用得到的）
         if: inputs.nested-subs != ''
         run: |
+          # 路径表对每个上游都试一遍，只取它自己有的：不是它的子模块的路径，git 会报 pathspec 不匹配
           for d in third_party/*/; do
-            git -C "$d" submodule update --init --recursive --depth 1 -- ${{ inputs.nested-subs }}
+            for p in ${{ inputs.nested-subs }}; do
+              git -C "$d" ls-files -s -- "$p" | grep -q '^160000' || continue
+              git -C "$d" submodule update --init --recursive --depth 1 -- "$p"
+            done
           done
 
       - name: 额外的系统包
