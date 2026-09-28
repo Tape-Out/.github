@@ -45,6 +45,10 @@ on:
           要固定就在这里钉一个标签。
         type: string
         default: main
+      apt:
+        description: 各仓测试要的额外系统包（空格分隔），如 riscv-tests 要的 gcc-riscv64-unknown-elf
+        type: string
+        default: ""
 
 permissions:
   contents: write        # 面积要写进 area 分支
@@ -67,6 +71,12 @@ jobs:
           for d in third_party/*/; do
             git -C "$d" submodule update --init --recursive --depth 1 -- ${{ inputs.nested-subs }}
           done
+
+      - name: 额外的系统包
+        if: inputs.apt != ''
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ${{ inputs.apt }}
 
       - name: 这次改到源码了吗
         id: changed
