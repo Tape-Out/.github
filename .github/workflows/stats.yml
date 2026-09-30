@@ -1,0 +1,38 @@
+name: stats
+# 全组织的代码量：手动跑，每个公开仓浅克隆一份，tokei 数一遍，汇成一张表写进 job summary。
+# 上游子模块（third_party/）不算，那是别人的代码
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  count:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: tokei
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq tokei
+
+      - name: 数
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          S="$GITHUB_STEP_SUMMARY"
+          echo "| 仓 | 行数（代码） | 注释 | 主要语言 |" >> "$S"
+          echo "|:--:|:--:|:--:|:--:|" >> "$S"
+          total=0
+          for r in $(gh repo list "${{ github.repository_owner }}" --visibility public --no-archived \
+                       --limit 500 --json name -q '.[].name' | sort); do
+            d=/tmp/r/$r
+            git clone -q --depth 1 "https://github.com/${{ github.repository_owner }}/$r" "$d" 2>/dev/null || continue
+            tokei --exclude third_party --output json "$d" > /tmp/t.json 2>/dev/null || continue
+            read -r code comm lang < <(python3 -c "
+          import json
+          d = json.load(open('/tmp/t.json'))
+          t = d.pop('Total', {})
+          top = max(d.items(), key=lambda kv: kv[1].get('code', 0), default=('—', {}))[0]
+          print(t.get('code', 0), t.get('comments', 0), top)")
+            echo "| \`$r\` | $code | $comm | $lang |" >> "$S"
+            total=$((total + code))
+            rm -rf "$d"
+          done
+          echo "" >> "$S"
+          echo "合计 $total 行代码。" >> "$S"

@@ -240,7 +240,9 @@ jobs:
           n=set((d.get('deps') or {}).keys())
           n |= {i['of'] for i in (d.get('instances') or [])}
           print(' '.join(sorted(n)))"); do
-            git clone --depth 1 "https://github.com/Tape-Out/$d" "/tmp/ws/$d" || true
+            # 黑盒的源码在它自己的子模块里：流片仓交付的就是依赖里的黑盒，不连子模块一起取就展不开
+            git clone --depth 1 --recurse-submodules --shallow-submodules \
+              "https://github.com/Tape-Out/$d" "/tmp/ws/$d" || true
           done
           # 实例用到的包各自还有依赖，再拉一层就够——本版没有更深的
           for y in /tmp/ws/*/ip.yaml; do
@@ -248,7 +250,7 @@ jobs:
           import yaml,sys
           d=yaml.safe_load(open('$y'))
           print(' '.join((d.get('deps') or {}).keys()))"); do
-              [ -d "/tmp/ws/$d" ] || git clone --depth 1 \
+              [ -d "/tmp/ws/$d" ] || git clone --depth 1 --recurse-submodules --shallow-submodules \
                 "https://github.com/Tape-Out/$d" "/tmp/ws/$d" || true
             done
           done
@@ -357,6 +359,18 @@ jobs:
           # 价目表失效时，说清是哪一部分变了
           if python3 -m xirang.cli diffsigs "$N" 2>/dev/null | grep -q "来自生成器\|源码动了"; then
             say "价目表摘要" python3 -m xirang.cli diffsigs "$N"
+          fi
+
+      # 只打日志：这个仓自己写了多少、什么语言。上游的子模块不算，结论也不受它影响
+      - name: 代码量
+        if: always()
+        continue-on-error: true
+        run: |
+          sudo apt-get install -y -qq tokei > /dev/null 2>&1 || true
+          if command -v tokei > /dev/null; then
+            tokei --exclude third_party "$GITHUB_WORKSPACE" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "tokei 没装上，这一步只是统计，跳过"
           fi
 
       # 面积在公共 runner 上量不了：ICS55 的 PDK 要登录 ECOS Factory 才取得到，
