@@ -366,9 +366,12 @@ jobs:
         if: always()
         continue-on-error: true
         run: |
-          sudo apt-get install -y -qq tokei > /dev/null 2>&1 || true
-          if command -v tokei > /dev/null; then
-            tokei --exclude third_party "$GITHUB_WORKSPACE" | tee -a "$GITHUB_STEP_SUMMARY"
+          # apt 源里没有 tokei；v12.1.2 是最后一版发了 Linux 二进制的
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL https://github.com/XAMPPRocky/tokei/releases/download/v12.1.2/tokei-x86_64-unknown-linux-musl.tar.gz |
+            tar xz -C "$HOME/.local/bin" || true
+          if [ -x "$HOME/.local/bin/tokei" ]; then
+            "$HOME/.local/bin/tokei" --exclude third_party "$GITHUB_WORKSPACE" | tee -a "$GITHUB_STEP_SUMMARY"
           else
             echo "tokei 没装上，这一步只是统计，跳过"
           fi

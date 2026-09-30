@@ -8,8 +8,14 @@ jobs:
   count:
     runs-on: ubuntu-24.04
     steps:
+      # apt 源里没有 tokei；v12.1.2 是最后一版发了 Linux 二进制的
       - name: tokei
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq tokei
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL https://github.com/XAMPPRocky/tokei/releases/download/v12.1.2/tokei-x86_64-unknown-linux-musl.tar.gz |
+            tar xz -C "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/tokei" --version
 
       - name: 数
         env:
