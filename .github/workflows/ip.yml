@@ -220,6 +220,11 @@ jobs:
             case " $D " in *" $k "*) echo "kind=$k" >> "$GITHUB_OUTPUT"; break;; esac
           done
           echo "目标：$D"
+          # 流片仓可以整颗是别人的黑盒、只套一层顶层：自己没有源码，kind 落到 none，但有 asic 段与整片测试
+          python3 -c "
+          import yaml
+          d = yaml.safe_load(open('$GITHUB_WORKSPACE/ip.yaml')) or {}
+          print('asic=' + ('yes' if d.get('asic') else 'no'))" >> "$GITHUB_OUTPUT"
 
       # 黑盒那一路要的两样：iverilog 跑上游自己的测试台，pyslang 把展开之后的
       # 端口表拿回来核对声明。装不上 pyslang 只会少一道核对，不会假装核对过了
@@ -282,6 +287,10 @@ jobs:
           mkdir -p /tmp/out /tmp/b /tmp/b2 /tmp/rtl
           cd /tmp/ws
           N="$(basename "$GITHUB_REPOSITORY")"
+          if [ "${{ steps.how.outputs.kind }}" = none ] && [ "${{ steps.how.outputs.asic }}" = yes ]; then
+            echo "流片仓：没有自己要生成或编译的源码，交付的 .v 由 ran asic 出；测试在下一步"
+            exit 0
+          fi
           case "${{ steps.how.outputs.kind }}" in
             library)
               # 库包不生成东西，也不进地址图。先类型检查，再跑 htest/ 里的行为测试：
@@ -330,7 +339,7 @@ jobs:
       - name: 矩阵测试
         if: >-
           steps.how.outputs.kind != 'library' &&
-          steps.how.outputs.kind != 'none'
+          (steps.how.outputs.kind != 'none' || steps.how.outputs.asic == 'yes')
         run: |
           export PATH="$HOME/bsc-install/bin:$PATH"
           cd /tmp/ws
