@@ -61,6 +61,10 @@ on:
         description: 要比 apt 那版（Ubuntu 24.04 是 5.020）新的 Verilator 就写标签（如 v5.032），从源码编一次并缓存；空着不装
         type: string
         default: ""
+      qemu:
+        description: 要 QEMU 就写版本号（如 10.2.1），从源码编 RISC-V 的系统仿真并缓存；apt 那版太旧（24.04 是 8.2），统一用 10 以上。空着不装
+        type: string
+        default: ""
       bender:
         description: 要 bender 就写发布版本（如 v0.32.1），取官方发布的二进制；空着不装
         type: string
@@ -174,7 +178,7 @@ jobs:
 
       - name: 托管机镜像
         id: img
-        if: inputs.verilator != ''
+        if: inputs.verilator != '' || inputs.qemu != ''
         run: echo "id=$ImageOS" >> "$GITHUB_OUTPUT"
 
       - name: 取缓存的 Verilator
@@ -202,6 +206,31 @@ jobs:
           fi
           echo "$HOME/verilator/bin" >> "$GITHUB_PATH"
           "$HOME/verilator/bin/verilator" --version
+
+      - name: 取缓存的 QEMU
+        id: qemu-cache
+        if: inputs.qemu != ''
+        uses: actions/cache@v6
+        with:
+          path: ~/qemu
+          key: qemu-${{ inputs.qemu }}-riscv-${{ steps.img.outputs.id }}
+
+      # QEMU 也不出预编译包。只编 RISC-V 的两个系统仿真目标；configure 用系统的 Python，不用上面装的那一版
+      - name: QEMU
+        if: inputs.qemu != ''
+        run: |
+          if [ "${{ steps.qemu-cache.outputs.cache-hit }}" != true ]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq ninja-build libglib2.0-dev libpixman-1-dev pkg-config python3-venv
+            curl -fsSL "https://download.qemu.org/qemu-${{ inputs.qemu }}.tar.xz" | tar xJ -C /tmp
+            cd "/tmp/qemu-${{ inputs.qemu }}"
+            ./configure --prefix="$HOME/qemu" --python=/usr/bin/python3 \
+              --target-list=riscv32-softmmu,riscv64-softmmu --disable-docs --disable-werror
+            make -j"$(nproc)"
+            make install
+          fi
+          echo "$HOME/qemu/bin" >> "$GITHUB_PATH"
+          "$HOME/qemu/bin/qemu-system-riscv32" --version
 
       # 从前这里是四路 grep：kind: library 归库、有 instances 归装配、有 verilog-flat
       # 归扁平、其余一律算「有寄存器图」。`rvdbg` 这种只出 BSV 的调试模块落进最后一档。
@@ -349,6 +378,19 @@ jobs:
           else
             python3 -m xirang.cli test "$N" -o /tmp/mx --point Default
           fi
+
+      # 整片测试的 results.xml 与各段的日志留下来：归档流片材料时取的就是流水线上的这一份
+      - name: 留下测试结果
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-${{ github.event.repository.name }}
+          path: |
+            /tmp/mx/**/results.xml
+            /tmp/mx/**/*.log
+            /tmp/mx/**/*.err
+          if-no-files-found: ignore
+          retention-days: 30
 
       # 门禁过了还要说得清「这一版是什么」。三张表都读同一份解出来的数据，
       # 贴进 job summary：审 PR 的人不必把仓拉下来才看得见端点、依赖与引脚。
