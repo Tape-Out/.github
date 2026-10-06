@@ -192,6 +192,30 @@ jobs:
           tar --zstd -cf /tmp/asic.tar.zst -C /tmp asic 2>/dev/null || true
           ls -la /tmp/asic.tar.zst || true
 
+      # 交付要的只是几样小东西：展平的 .v、报告、ecc.toml、签核包，外加各步的日志与报表（后端挂了靠它们看原因）。
+      # 整个输出目录有六百多兆，从流水线取回来要半小时以上，所以这几样单独留一份
+      - name: 交付件
+        if: always()
+        run: |
+          mkdir -p /tmp/deliver
+          cd /tmp/asic 2>/dev/null || exit 0
+          if [ -d default/Harden_ecc ]; then
+            ecc signoff export --workspace default -o /tmp/deliver/signoff.tar.gz --plain || true
+          fi
+          cp -f ./*.v report.json ecc.toml ran-asic.log /tmp/deliver/ 2>/dev/null || true
+          find default -type f \( -name '*.log' -o -name '*.rpt' -o -name '*.json' -o -name '*.txt' \) -size -8M -print0 \
+            | tar --zstd -cf /tmp/deliver/logs.tar.zst --null -T - 2>/dev/null || true
+          ls -la /tmp/deliver
+
+      - name: 留下交付件
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: deliver-${{ github.event.repository.name }}-${{ inputs.flow }}
+          path: /tmp/deliver
+          retention-days: 30
+          if-no-files-found: warn
+
       - name: 留下构件
         if: always()
         uses: actions/upload-artifact@v7
