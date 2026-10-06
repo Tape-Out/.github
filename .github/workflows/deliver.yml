@@ -1,0 +1,65 @@
+name: deliver
+
+# 后端一次跑下来的整包构件有几个 G，从本机取要一两个小时。在托管机上把它取下来、解开，
+# 只留交付要的几样（展平的 .v、报告、ecc.toml、签核包、各步的日志），另存成一份小的构件。
+# asic.yml 现在自己就留这一份；这条流水线给加这一步之前跑完的那几次用。
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: 哪个流片仓，如 to2610-gpu
+        required: true
+      run:
+        description: 后端那一次的 run id
+        required: true
+      ecc:
+        description: ecc 的版本
+        default: v0.1.0-alpha.12
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  deliver:
+    runs-on: ubuntu-26.04
+    steps:
+      - name: 取整包并解开
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sudo mkdir -p /mnt/w
+          sudo chown "$USER" /mnt/w
+          gh run download "${{ inputs.run }}" -R "Tape-Out/${{ inputs.repo }}" -D /mnt/w/dl
+          find /mnt/w/dl -type f -printf '%s %p\n'
+          tar --zstd -xf "$(find /mnt/w/dl -name '*.tar.zst' | head -n 1)" -C /mnt/w
+          rm -rf /mnt/w/dl
+          du -sh /mnt/w/asic
+
+      - name: 装 ecc 与 PDK
+        run: |
+          curl -fsSL "https://release.openecos.com/installers/ecc/${{ inputs.ecc }}/ecc-installer.sh" \
+            | sh -s -- --with-toolchain --download-source github
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: 交付件
+        run: |
+          mkdir -p /mnt/w/deliver
+          cd /mnt/w/asic
+          # 工作区里记的是当时的绝对路径
+          sudo mkdir -p /tmp/asic 2>/dev/null && sudo mount --bind /mnt/w/asic /tmp/asic
+          if [ -d default/Harden_ecc ]; then
+            (cd /tmp/asic && ecc signoff export --workspace default -o /mnt/w/deliver/signoff.tar.gz --plain)
+          fi
+          cp -f ./*.v report.json ecc.toml ran-asic.log /mnt/w/deliver/ 2>/dev/null || true
+          find default -type f \( -name '*.log' -o -name '*.rpt' -o -name '*.json' -o -name '*.txt' \) -size -8M -print0 \
+            | tar --zstd -cf /mnt/w/deliver/logs.tar.zst --null -T - 2>/dev/null || true
+          ls -la /mnt/w/deliver
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: deliver-${{ inputs.repo }}-rtl2gds
+          path: /mnt/w/deliver
+          retention-days: 30
+          if-no-files-found: error
