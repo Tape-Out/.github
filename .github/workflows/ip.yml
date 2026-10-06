@@ -140,6 +140,10 @@ jobs:
           tar xzf /tmp/bsc.tgz -C "$HOME/bsc-install" --strip-components=1
           "$HOME/bsc-install/bin/bsc" -v | head -2
 
+
+      # 缓存命中时上一步不跑，所以单列一步；黑盒仓的生成步骤里也可能回调息壤去装配一块 BSV 的外设
+      - name: bsc 进 PATH
+        run: echo "$HOME/bsc-install/bin" >> "$GITHUB_PATH"
       # xirang 要 3.14。系统自带的那份不许 pip 往里装，另取一份
       - uses: actions/setup-python@v7
         with:
