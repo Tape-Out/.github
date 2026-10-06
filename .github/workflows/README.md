@@ -23,3 +23,18 @@ only show up as a simulation that hangs.
 Areas are written by the bot to an `area` branch, unsigned. Every commit on a main
 branch in this organisation is signed by a person; the bot never touches one. A human
 reviews what landed on `area` and moves the numbers across.
+
+`asic.yml` runs the backend of a tape-out design from RTL to layout with the same `ran asic`
+used on a workstation, and keeps the outputs as an artifact. It takes hours, so a repository
+calls it from a workflow that is only started by hand:
+
+```yaml
+name: asic
+on: workflow_dispatch
+jobs:
+  asic:
+    uses: Tape-Out/.github/.github/workflows/asic.yml@main
+```
+
+ECC, the synthesis tools and the ICS55 PDK come from the installer ECOS publishes; the `ecc`
+input selects its version.

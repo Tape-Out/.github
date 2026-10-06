@@ -1,0 +1,184 @@
+name: asic
+
+# 组织级可复用流水线：一颗流片设计的后端从头走到尾，产物打包留作构件。
+# 一次要几个小时，只有流片仓用得着，所以只手动触发。各仓的 asic.yml：
+#
+#   name: asic
+#   on: workflow_dispatch
+#   jobs:
+#     asic:
+#       uses: Tape-Out/.github/.github/workflows/asic.yml@main
+#
+# 跑的就是本机那一条 ran asic。ecc、综合工具与 PDK 由 ECOS 公开发布的安装脚本来装，
+# 脚本里钉着各件的版本与摘要；输入 ecc 选的是哪一版脚本。
+
+on:
+  workflow_call:
+    inputs:
+      flow:
+        description: ecc 预设。syn_sta 只到综合后时序，rtl2gds 走到版图
+        type: string
+        default: rtl2gds
+      ecc:
+        description: ecc 的发布版本，安装脚本按它取
+        type: string
+        default: v0.1.0-alpha.12
+      bsc-ref:
+        description: 取哪个 bsc 发布版
+        type: string
+        default: "2026.01"
+      xirang-ref:
+        description: 取哪个版本的 xirang
+        type: string
+        default: main
+      apt:
+        description: 展平要的额外系统包（空格分隔）
+        type: string
+        default: ""
+      pip:
+        description: 展平要的额外 Python 包（空格分隔）
+        type: string
+        default: ""
+      sv2v:
+        description: 要 sv2v 就写发布版本（如 v0.0.13）；空着不装
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  asic:
+    runs-on: ubuntu-latest
+    # 托管机一个任务最多六小时
+    timeout-minutes: 355
+    env:
+      PYTHONUNBUFFERED: "1"
+      NO_COLOR: "1"
+      TERM: dumb
+      COLUMNS: "200"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: 额外的系统包
+        if: inputs.apt != ''
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ${{ inputs.apt }}
+
+      - name: 取缓存的 bsc
+        id: bsc-cache
+        uses: actions/cache@v6
+        with:
+          path: ~/bsc-install
+          key: bsc-${{ inputs.bsc-ref }}-${{ runner.os }}
+
+      - name: 取 bsc
+        if: steps.bsc-cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libtcl8.6 || sudo apt-get install -y -qq tcl
+          ver="${{ inputs.bsc-ref }}"
+          for d in ubuntu-24.04 ubuntu-22.04 debian-12.13; do
+            url="https://github.com/B-Lang-org/bsc/releases/download/$ver/bsc-$ver-$d.tar.gz"
+            if curl -fsSL "$url" -o /tmp/bsc.tgz; then echo "取到 $d"; break; fi
+          done
+          test -s /tmp/bsc.tgz || { echo "::error::没有可用的 bsc 发布包"; exit 1; }
+          mkdir -p "$HOME/bsc-install"
+          tar xzf /tmp/bsc.tgz -C "$HOME/bsc-install" --strip-components=1
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.14"
+
+      - name: 装 xirang
+        run: |
+          python3 -m pip install --quiet pyyaml pyslang
+          git clone --depth 1 --branch ${{ inputs.xirang-ref }} \
+            https://github.com/Tape-Out/xirang /tmp/xirang
+          echo "PYTHONPATH=$(ls -d /tmp/xirang/packages/*/src | tr '\n' ':')" >> "$GITHUB_ENV"
+          echo "$HOME/bsc-install/bin" >> "$GITHUB_PATH"
+
+      - name: 额外的 Python 包
+        if: inputs.pip != ''
+        run: python3 -m pip install --quiet ${{ inputs.pip }}
+
+      - name: sv2v
+        if: inputs.sv2v != ''
+        run: |
+          curl -fsSL -o /tmp/sv2v.zip \
+            "https://github.com/zachjs/sv2v/releases/download/${{ inputs.sv2v }}/sv2v-Linux.zip"
+          unzip -q -o /tmp/sv2v.zip -d "$HOME/sv2v"
+          echo "$HOME/sv2v/sv2v-Linux" >> "$GITHUB_PATH"
+
+      # 与 ip.yml 同一段：清单里的依赖与实例，再往下一层
+      - name: 拉依赖
+        run: |
+          mkdir -p /tmp/ws
+          ln -s "$GITHUB_WORKSPACE" "/tmp/ws/$(basename "$GITHUB_REPOSITORY")"
+          for d in $(python3 -c "
+          import yaml,sys
+          d=yaml.safe_load(open('ip.yaml'))
+          n=set((d.get('deps') or {}).keys())
+          n |= {i['of'] for i in (d.get('instances') or [])}
+          print(' '.join(sorted(n)))"); do
+            git clone --depth 1 --recurse-submodules --shallow-submodules \
+              "https://github.com/Tape-Out/$d" "/tmp/ws/$d" || true
+          done
+          for y in /tmp/ws/*/ip.yaml; do
+            for d in $(python3 -c "
+          import yaml,sys
+          d=yaml.safe_load(open('$y'))
+          print(' '.join((d.get('deps') or {}).keys()))"); do
+              [ -d "/tmp/ws/$d" ] || git clone --depth 1 --recurse-submodules --shallow-submodules \
+                "https://github.com/Tape-Out/$d" "/tmp/ws/$d" || true
+            done
+          done
+
+      - name: 装 ecc、综合工具与 PDK
+        run: |
+          curl -fsSL "https://release.openecos.com/installers/ecc/${{ inputs.ecc }}/ecc-installer.sh" \
+            | sh -s -- --with-toolchain --download-source github
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/ecc" version
+          ls -d "$HOME"/.local/share/ecc/pdks/*/v*
+
+      - name: 后端
+        shell: bash
+        run: |
+          cd /tmp/ws
+          N="$(basename "$GITHUB_REPOSITORY")"
+          free -g | sed -n 2p
+          df -h /tmp | tail -n 1
+          timeout -k 60 320m python3 -m xirang.cli asic "$N" --flow "${{ inputs.flow }}" -o /tmp/asic 2>&1 | tee /tmp/asic.log
+
+      - name: 结果
+        if: always()
+        run: |
+          S="$GITHUB_STEP_SUMMARY"
+          if [ -s /tmp/asic/report.json ]; then
+            echo '```json' >> "$S"
+            python3 -m json.tool --no-ensure-ascii /tmp/asic/report.json | head -n 200 >> "$S"
+            echo '```' >> "$S"
+          else
+            echo "没有 report.json：后端没走到出报告那一步" >> "$S"
+          fi
+          cp /tmp/asic.log /tmp/asic/ran-asic.log 2>/dev/null || true
+          echo '```' >> "$S"
+          du -sh /tmp/asic 2>/dev/null >> "$S" || true
+          (cd /tmp/asic 2>/dev/null && find . -maxdepth 4 -type f -size +1M -printf '%s\t%p\n' | sort -n | tail -n 60) >> "$S" || true
+          echo '```' >> "$S"
+          tar --zstd -cf /tmp/asic.tar.zst -C /tmp asic 2>/dev/null || true
+          ls -la /tmp/asic.tar.zst || true
+
+      - name: 留下构件
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: asic-${{ github.event.repository.name }}-${{ inputs.flow }}
+          path: /tmp/asic.tar.zst
+          compression-level: 0
+          retention-days: 30
+          if-no-files-found: warn
