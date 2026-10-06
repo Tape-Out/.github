@@ -23,6 +23,10 @@ name: ip
 on:
   workflow_call:
     inputs:
+      os:
+        description: 托管机镜像。默认用最新的 LTS，系统包随之是新的（QEMU 10、Verilator 5.032、Python 3.14）；有特别要求的仓才钉旧的
+        type: string
+        default: ubuntu-26.04
       bsc-ref:
         description: 取哪个 bsc 发布版
         type: string
@@ -46,7 +50,7 @@ on:
         type: string
         default: main
       apt:
-        description: 各仓测试要的额外系统包（空格分隔），如 riscv-tests 要的 gcc-riscv64-unknown-elf
+        description: 各仓测试要的额外系统包（空格分隔），如 riscv-tests 要的 gcc-riscv64-unknown-elf、跑镜像要的 qemu-system-riscv
         type: string
         default: ""
       pip:
@@ -58,11 +62,7 @@ on:
         type: string
         default: ""
       verilator:
-        description: 要比 apt 那版（Ubuntu 24.04 是 5.020）新的 Verilator 就写标签（如 v5.032），从源码编一次并缓存；空着不装
-        type: string
-        default: ""
-      qemu:
-        description: 要 QEMU 就写版本号（如 10.2.1），从源码编 RISC-V 的系统仿真并缓存；apt 那版太旧（24.04 是 8.2），统一用 10 以上。空着不装
+        description: apt 那版（Ubuntu 26.04 是 5.032）够用就写进 apt；要更新的才在这里写标签（如 v5.050），从源码编一次并缓存。空着不装
         type: string
         default: ""
       bender:
@@ -77,7 +77,7 @@ jobs:
   gate:
     # spec 分支只放规范原件溯源、area 分支只放面积数据，都没有 ip.yaml；各仓 ci.yml 不限分支，在这里拦
     if: github.ref_name != 'spec' && github.ref_name != 'area'
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.os }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -120,7 +120,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/bsc-install
-          key: bsc-${{ inputs.bsc-ref }}-${{ runner.os }}
+          key: bsc-${{ inputs.bsc-ref }}-${{ inputs.os }}
 
       # 用官方发布的预编译包。从源码编译要二十多分钟且依赖脆弱，
       # 而「跟得上上游」靠的是钉住哪个 release，不是自己编。
@@ -130,7 +130,8 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq libtcl8.6 || sudo apt-get install -y -qq tcl
           ver="${{ inputs.bsc-ref }}"
-          for d in ubuntu-24.04 ubuntu-22.04 debian-12.13; do
+          . /etc/os-release
+          for d in "ubuntu-$VERSION_ID" ubuntu-24.04 ubuntu-22.04 debian-12.13; do
             url="https://github.com/B-Lang-org/bsc/releases/download/$ver/bsc-$ver-$d.tar.gz"
             if curl -fsSL "$url" -o /tmp/bsc.tgz; then echo "取到 $d"; break; fi
           done
@@ -139,7 +140,7 @@ jobs:
           tar xzf /tmp/bsc.tgz -C "$HOME/bsc-install" --strip-components=1
           "$HOME/bsc-install/bin/bsc" -v | head -2
 
-      # xirang 要 3.14；托管机自带 3.12，连 PurePath.full_match 都没有
+      # xirang 要 3.14。系统自带的那份不许 pip 往里装，另取一份
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
@@ -178,7 +179,7 @@ jobs:
 
       - name: 托管机镜像
         id: img
-        if: inputs.verilator != '' || inputs.qemu != ''
+        if: inputs.verilator != ''
         run: echo "id=$ImageOS" >> "$GITHUB_OUTPUT"
 
       - name: 取缓存的 Verilator
@@ -190,7 +191,7 @@ jobs:
           # 编出来的链接了系统的 libc，托管机换版本就不能再用
           key: verilator-${{ inputs.verilator }}-${{ steps.img.outputs.id }}
 
-      # Verilator 不出预编译包。apt 那版不够用的上游（VeeR EL2 的测试台 force 自己的输入口，5.020 不支持）钉标签自己编
+      # Verilator 不出预编译包。apt 那版不够用的上游才钉标签自己编
       - name: Verilator
         if: inputs.verilator != ''
         run: |
@@ -206,31 +207,6 @@ jobs:
           fi
           echo "$HOME/verilator/bin" >> "$GITHUB_PATH"
           "$HOME/verilator/bin/verilator" --version
-
-      - name: 取缓存的 QEMU
-        id: qemu-cache
-        if: inputs.qemu != ''
-        uses: actions/cache@v6
-        with:
-          path: ~/qemu
-          key: qemu-${{ inputs.qemu }}-riscv-${{ steps.img.outputs.id }}
-
-      # QEMU 也不出预编译包。只编 RISC-V 的两个系统仿真目标；configure 用系统的 Python，不用上面装的那一版
-      - name: QEMU
-        if: inputs.qemu != ''
-        run: |
-          if [ "${{ steps.qemu-cache.outputs.cache-hit }}" != true ]; then
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq ninja-build libglib2.0-dev libpixman-1-dev pkg-config python3-venv
-            curl -fsSL "https://download.qemu.org/qemu-${{ inputs.qemu }}.tar.xz" | tar xJ -C /tmp
-            cd "/tmp/qemu-${{ inputs.qemu }}"
-            ./configure --prefix="$HOME/qemu" --python=/usr/bin/python3 \
-              --target-list=riscv32-softmmu,riscv64-softmmu --disable-docs --disable-werror
-            make -j"$(nproc)"
-            make install
-          fi
-          echo "$HOME/qemu/bin" >> "$GITHUB_PATH"
-          "$HOME/qemu/bin/qemu-system-riscv32" --version
 
       # 从前这里是四路 grep：kind: library 归库、有 instances 归装配、有 verilog-flat
       # 归扁平、其余一律算「有寄存器图」。`rvdbg` 这种只出 BSV 的调试模块落进最后一档。

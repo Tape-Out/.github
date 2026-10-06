@@ -6,7 +6,7 @@ permissions:
   contents: read
 jobs:
   count:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       # apt 源里没有 tokei；v12.1.2 是最后一版发了 Linux 二进制的
       - name: tokei

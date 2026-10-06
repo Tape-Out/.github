@@ -15,6 +15,10 @@ name: asic
 on:
   workflow_call:
     inputs:
+      os:
+        description: 托管机镜像。默认用最新的 LTS，系统包随之是新的（QEMU 10、Verilator 5.032、Python 3.14）；有特别要求的仓才钉旧的
+        type: string
+        default: ubuntu-26.04
       flow:
         description: ecc 预设。syn_sta 只到综合后时序，rtl2gds 走到版图
         type: string
@@ -49,7 +53,7 @@ permissions:
 
 jobs:
   asic:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.os }}
     # 托管机一个任务最多六小时
     timeout-minutes: 355
     env:
@@ -73,7 +77,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/bsc-install
-          key: bsc-${{ inputs.bsc-ref }}-${{ runner.os }}
+          key: bsc-${{ inputs.bsc-ref }}-${{ inputs.os }}
 
       - name: 取 bsc
         if: steps.bsc-cache.outputs.cache-hit != 'true'
@@ -81,7 +85,8 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq libtcl8.6 || sudo apt-get install -y -qq tcl
           ver="${{ inputs.bsc-ref }}"
-          for d in ubuntu-24.04 ubuntu-22.04 debian-12.13; do
+          . /etc/os-release
+          for d in "ubuntu-$VERSION_ID" ubuntu-24.04 ubuntu-22.04 debian-12.13; do
             url="https://github.com/B-Lang-org/bsc/releases/download/$ver/bsc-$ver-$d.tar.gz"
             if curl -fsSL "$url" -o /tmp/bsc.tgz; then echo "取到 $d"; break; fi
           done
