@@ -123,24 +123,26 @@ jobs:
         run: |
           mkdir -p /tmp/ws
           ln -s "$GITHUB_WORKSPACE" "/tmp/ws/$(basename "$GITHUB_REPOSITORY")"
-          for d in $(python3 -c "
-          import yaml,sys
-          d=yaml.safe_load(open('ip.yaml'))
-          n=set((d.get('deps') or {}).keys())
-          n |= {i['of'] for i in (d.get('instances') or [])}
-          print(' '.join(sorted(n)))"); do
-            git clone --depth 1 --recurse-submodules --shallow-submodules \
-              "https://github.com/Tape-Out/$d" "/tmp/ws/$d" || true
-          done
-          for y in /tmp/ws/*/ip.yaml; do
-            for d in $(python3 -c "
-          import yaml,sys
-          d=yaml.safe_load(open('$y'))
-          print(' '.join((d.get('deps') or {}).keys()))"); do
-              [ -d "/tmp/ws/$d" ] || git clone --depth 1 --recurse-submodules --shallow-submodules \
-                "https://github.com/Tape-Out/$d" "/tmp/ws/$d" || true
-            done
-          done
+          # 依赖与实例用到的包逐层取到头：流片仓可以依赖另一颗流片仓，那一颗自己还有实例。
+          # 黑盒的源码在它自己的子模块里，不连子模块一起取就展不开
+          python3 - <<'EOF'
+          import pathlib, subprocess, yaml
+          ws = pathlib.Path("/tmp/ws")
+          seen, todo = set(), [p.name for p in ws.iterdir()]
+          while todo:
+              n = todo.pop()
+              if n in seen:
+                  continue
+              seen.add(n)
+              if not (ws / n).exists():
+                  subprocess.run(["git", "clone", "--depth", "1", "--recurse-submodules", "--shallow-submodules",
+                                  f"https://github.com/Tape-Out/{n}", str(ws / n)])
+              y = ws / n / "ip.yaml"
+              if y.exists():
+                  d = yaml.safe_load(y.read_text(encoding="utf-8")) or {}
+                  todo += list(d.get("deps") or {}) + [i["of"] for i in d.get("instances") or []]
+          EOF
+          ls /tmp/ws
 
       - name: 装 ecc、综合工具与 PDK
         run: |
