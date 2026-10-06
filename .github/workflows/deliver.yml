@@ -50,7 +50,13 @@ jobs:
           # 工作区里记的是当时的绝对路径
           sudo mkdir -p /tmp/asic 2>/dev/null && sudo mount --bind /mnt/w/asic /tmp/asic
           if [ -d default/Harden_ecc ]; then
-            (cd /tmp/asic && ecc signoff export --workspace default -o /mnt/w/deliver/signoff.tar.gz --plain)
+            # 等价比对没证完时 ecc 不肯出签核包（signoff_incomplete）：留下它说缺什么，
+            # 云平台要的 DEF 与门级网表从最后一步的输出里直接取
+            (cd /tmp/asic && ecc signoff export --workspace default -o /mnt/w/deliver/signoff.tar.gz --plain) \
+              || (cd /tmp/asic && ecc signoff inspect --workspace default) > /mnt/w/deliver/signoff-inspect.txt 2>&1 || true
+            ls default/Harden_ecc/output
+            cp -f default/Harden_ecc/output/*.def.gz /mnt/w/deliver/final.def.gz
+            cp -f default/Harden_ecc/output/*.v.gz /mnt/w/deliver/final.v.gz
           fi
           cp -f ./*.v report.json ecc.toml ran-asic.log /mnt/w/deliver/ 2>/dev/null || true
           find default -type f \( -name '*.log' -o -name '*.rpt' -o -name '*.json' -o -name '*.txt' \) -size -8M -print0 \

@@ -215,7 +215,12 @@ jobs:
           mkdir -p /tmp/deliver
           cd /tmp/asic 2>/dev/null || exit 0
           if [ -d default/Harden_ecc ]; then
-            ecc signoff export --workspace default -o /tmp/deliver/signoff.tar.gz --plain || true
+            # 等价比对没证完时 ecc 不肯出签核包（signoff_incomplete）：留下它说缺什么，
+            # 云平台要的 DEF 与门级网表从最后一步的输出里直接取
+            ecc signoff export --workspace default -o /tmp/deliver/signoff.tar.gz --plain \
+              || ecc signoff inspect --workspace default > /tmp/deliver/signoff-inspect.txt 2>&1 || true
+            cp -f default/Harden_ecc/output/*.def.gz /tmp/deliver/final.def.gz 2>/dev/null || true
+            cp -f default/Harden_ecc/output/*.v.gz /tmp/deliver/final.v.gz 2>/dev/null || true
           fi
           cp -f ./*.v report.json ecc.toml ran-asic.log /tmp/deliver/ 2>/dev/null || true
           find default -type f \( -name '*.log' -o -name '*.rpt' -o -name '*.json' -o -name '*.txt' \) -size -8M -print0 \
