@@ -145,13 +145,25 @@ jobs:
           "$HOME/.local/bin/ecc" version
           ls -d "$HOME"/.local/share/ecc/pdks/*/v*
 
+      # 布线后的时序分析要十来个 G，托管机只有 15 G 内存：不加交换区的话整台机器被收走，连构件都留不下
+      - name: 加交换区
+        run: |
+          sudo fallocate -l 24G /mnt/xr.swap
+          sudo chmod 600 /mnt/xr.swap
+          sudo mkswap -q /mnt/xr.swap
+          sudo swapon /mnt/xr.swap
+          free -g
+
       - name: 后端
         shell: bash
         run: |
           cd /tmp/ws
           N="$(basename "$GITHUB_REPOSITORY")"
-          free -g | sed -n 2p
           df -h /tmp | tail -n 1
+          # ran asic 跑完才出字。每两分钟报一次内存与 ecc 走到了哪一步，中途断了也看得出断在哪
+          ( while sleep 120; do
+              echo "[$(date +%T)] $(free -m | awk 'NR==2{printf "内存 %d MB ", $3} NR==3{printf "交换 %d MB", $3}') 步骤：$(ls -t /tmp/asic/default 2>/dev/null | head -n 3 | xargs)"
+            done ) &
           timeout -k 60 320m python3 -m xirang.cli asic "$N" --flow "${{ inputs.flow }}" -o /tmp/asic 2>&1 | tee /tmp/asic.log
 
       - name: 结果
