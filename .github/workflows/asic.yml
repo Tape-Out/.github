@@ -62,6 +62,17 @@ jobs:
       TERM: dumb
       COLUMNS: "200"
     steps:
+      # Ubuntu 26.04 的 /tmp 是内存里的 tmpfs，按用户有配额：后端的输出有几个 G，写到一半报 Disk quota exceeded，
+      # 占的还是内存。各步都往 /tmp 下写，所以作业一开始把它换到 /mnt 那块盘上
+      - name: /tmp 放回磁盘
+        run: |
+          if [ "$(findmnt -n -o FSTYPE /tmp)" = tmpfs ]; then
+            sudo mkdir -p /mnt/tmp
+            sudo chmod 1777 /mnt/tmp
+            sudo mount --bind /mnt/tmp /tmp
+          fi
+          df -h /tmp | tail -n 1
+
       - uses: actions/checkout@v7
         with:
           submodules: recursive
