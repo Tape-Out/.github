@@ -248,3 +248,65 @@ jobs:
           compression-level: 0
           retention-days: 30
           if-no-files-found: warn
+
+      # 布线后的网表配标准单元的功能模型，跑仓里 gate 任务挑的那几项整片测试。放在构件留下之后：慢了被掐也不丢后端的结果。
+      # 没有 gate 任务的仓跳过
+      - name: 门级冒烟
+        if: success()
+        run: |
+          cd /tmp/ws
+          N="$(basename "$GITHUB_REPOSITORY")"
+          grep -q '^  gate:' "$GITHUB_WORKSPACE/ip.yaml" || { echo "$N 没有 gate 任务"; exit 0; }
+          [ -s /tmp/deliver/final.v.gz ] || { echo "没有布线后的网表"; exit 1; }
+          sudo apt-get install -y -qq iverilog > /dev/null
+          python3 -m pip install --quiet cocotb==1.9.2
+          cells=$(ls "$HOME"/.local/share/ecc/pdks/*/v*/IP/STD_cell/*/*/verilog/*.v 2> /dev/null || true)
+          if [ -z "$cells" ]; then
+            git clone -q --depth 1 --filter=blob:none --sparse https://github.com/openecos-projects/icsprout55-pdk /tmp/pdk
+            git -C /tmp/pdk sparse-checkout set IP/STD_cell
+            cells=$(ls /tmp/pdk/IP/STD_cell/*/*/verilog/*.v)
+          fi
+          echo "$cells"
+          # 布线后的网表把向量口拆成了一根根标量口（io_in_0 …）：顶层改名成 <顶层>_net，另写一个同名的顶层拼回向量口，
+          # 整片测试原样接得上。填充、接触、去耦这些物理单元没有功能模型，也不接线，删掉
+          mkdir -p /tmp/gate
+          python3 - /tmp/deliver/final.v.gz /tmp/gate/net.v <<'EOF'
+          import gzip, re, sys
+          from collections import defaultdict
+          text = gzip.open(sys.argv[1], "rt", encoding="utf-8").read()
+          m = re.search(r"\bmodule\s+(\w+)\s*\((.*?)\);", text, re.S)
+          top = m.group(1)
+          dirs = {n: d for d, n in re.findall(r"^\s*(input|output)\s+(\w+)\s*;", text, re.M)}
+          vec, scalar = defaultdict(dict), []
+          for q in re.findall(r"\w+", m.group(2)):
+              v = re.fullmatch(r"(\w+?)_(\d+)", q)
+              if v:
+                  vec[v.group(1)][int(v.group(2))] = q
+              else:
+                  scalar.append(q)
+          for base in [b for b, ix in vec.items() if len(ix) == 1]:
+              scalar += vec.pop(base).values()
+          ports = [f"  {dirs[q]} wire {q}" for q in scalar]
+          conns = [f"    .{q}({q})" for q in scalar]
+          for base, ix in sorted(vec.items()):
+              ports.append(f"  {dirs[ix[max(ix)]]} wire [{max(ix)}:0] {base}")
+              conns += [f"    .{n}({base}[{i}])" for i, n in sorted(ix.items())]
+          body = re.sub(rf"\bmodule\s+{top}\b", f"module {top}_net", text, count=1)
+          body, fills = re.subn(r"(?m)^\s*\w+\s+\w+\s*\(\s*\)\s*;\s*\n", "", body)
+          wrap = f"module {top} (\n" + ",\n".join(ports) + f"\n);\n  {top}_net net (\n" + ",\n".join(conns) + "\n  );\nendmodule\n"
+          open(sys.argv[2], "w", encoding="utf-8").write(body + "\n" + wrap)
+          print(f"{top}：{len(vec)} 组向量口拼回，删掉 {fills} 个物理单元")
+          EOF
+          export GATE_NETLIST=/tmp/gate/net.v CHIP_ASIC=/tmp/asic GATE_CELLS="$(echo $cells)"
+          python3 -m xirang.cli run "$N" gate -o /tmp/gate/run
+
+      - name: 留下门级冒烟的结果
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gate-${{ github.event.repository.name }}
+          path: |
+            /tmp/gate/run/**/results.xml
+            /tmp/gate/run/**/*.log
+          if-no-files-found: ignore
+          retention-days: 30
