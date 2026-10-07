@@ -69,6 +69,18 @@ on:
         description: 要 bender 就写发布版本（如 v0.32.1），取官方发布的二进制；空着不装
         type: string
         default: ""
+      tasks:
+        description: 只跑清单里这几个任务（空格分隔），不跑矩阵测试。给接在别的作业后面的那一段用，那几个任务不写进 test 段
+        type: string
+        default: ""
+      keep:
+        description: 跑完把仓里这个目录（相对仓根）留成构件 keep-<仓>，同一次运行里后面的作业用 restore 取回
+        type: string
+        default: ""
+      restore:
+        description: 跑之前把同一次运行里的 keep-<仓> 取回到仓里这个目录（相对仓根）
+        type: string
+        default: ""
 
 permissions:
   contents: write        # 面积要写进 area 分支
@@ -356,6 +368,13 @@ jobs:
       # 每个开关单独开一次、单独关一次，每个参数取两端，外加默认与两个极端。
       # 装配照 test.axes 扫实例的旋钮，没写就只有默认那一点。
       # 只改了文档就只跑默认那一点。
+      - name: 取回前一个作业留下的
+        if: inputs.restore != ''
+        uses: actions/download-artifact@v8
+        with:
+          name: keep-${{ github.event.repository.name }}
+          path: ${{ github.workspace }}/${{ inputs.restore }}
+
       - name: 矩阵测试
         if: >-
           steps.how.outputs.kind != 'library' &&
@@ -364,7 +383,14 @@ jobs:
           export PATH="$HOME/bsc-install/bin:$PATH"
           cd /tmp/ws
           N="$(basename "$GITHUB_REPOSITORY")"
-          if [ "${{ steps.changed.outputs.src }}" = "yes" ]; then
+          if [ -n "${{ inputs.tasks }}" ]; then
+            # 一个任务红了照样跑完后面的，最后一起算
+            rc=0
+            for t in ${{ inputs.tasks }}; do
+              python3 -m xirang.cli run "$N" "$t" -o "/tmp/mx/$t" || rc=1
+            done
+            exit $rc
+          elif [ "${{ steps.changed.outputs.src }}" = "yes" ]; then
             python3 -m xirang.cli test "$N" -o /tmp/mx
           else
             python3 -m xirang.cli test "$N" -o /tmp/mx --point Default
@@ -375,13 +401,22 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: test-${{ github.event.repository.name }}
+          name: test-${{ github.event.repository.name }}${{ inputs.tasks != '' && '-tasks' || '' }}
           path: |
             /tmp/mx/**/results.xml
             /tmp/mx/**/*.log
             /tmp/mx/**/*.err
           if-no-files-found: ignore
           retention-days: 30
+
+      - name: 留给后面的作业
+        if: always() && inputs.keep != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: keep-${{ github.event.repository.name }}
+          path: ${{ github.workspace }}/${{ inputs.keep }}
+          if-no-files-found: warn
+          retention-days: 7
 
       # 门禁过了还要说得清「这一版是什么」。三张表都读同一份解出来的数据，
       # 贴进 job summary：审 PR 的人不必把仓拉下来才看得见端点、依赖与引脚。
