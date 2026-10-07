@@ -81,6 +81,14 @@ on:
         description: 跑之前把同一次运行里的 keep-<仓> 取回到仓里这个目录（相对仓根）
         type: string
         default: ""
+      stage:
+        description: 接力里这一棒叫什么：留下的构件叫 keep-<仓>-<这一棒>、测试结果叫 test-<仓>-<这一棒>。一次运行里不止一棒要留东西时用
+        type: string
+        default: ""
+      from:
+        description: restore 取哪一棒留下的；空着是没起名的那一棒（keep-<仓>）
+        type: string
+        default: ""
 
 permissions:
   contents: write        # 面积要写进 area 分支
@@ -372,7 +380,7 @@ jobs:
         if: inputs.restore != ''
         uses: actions/download-artifact@v8
         with:
-          name: keep-${{ github.event.repository.name }}
+          name: keep-${{ github.event.repository.name }}${{ inputs.from != '' && format('-{0}', inputs.from) || '' }}
           path: ${{ github.workspace }}/${{ inputs.restore }}
 
       - name: 矩阵测试
@@ -401,7 +409,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: test-${{ github.event.repository.name }}${{ inputs.tasks != '' && '-tasks' || '' }}
+          name: test-${{ github.event.repository.name }}${{ inputs.stage != '' && format('-{0}', inputs.stage) || (inputs.tasks != '' && '-tasks' || '') }}
           path: |
             /tmp/mx/**/results.xml
             /tmp/mx/**/*.log
@@ -413,7 +421,7 @@ jobs:
         if: always() && inputs.keep != ''
         uses: actions/upload-artifact@v7
         with:
-          name: keep-${{ github.event.repository.name }}
+          name: keep-${{ github.event.repository.name }}${{ inputs.stage != '' && format('-{0}', inputs.stage) || '' }}
           path: ${{ github.workspace }}/${{ inputs.keep }}
           if-no-files-found: warn
           retention-days: 7
