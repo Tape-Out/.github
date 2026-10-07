@@ -1,0 +1,136 @@
+name: resume
+
+# 后端一次六小时没走完的，接着跑：取上一次留下的整个输出目录，在另一台托管机上从没做完的那一步继续。
+# 布线后的时序分析对十三个工艺角逐个算，十来万单元的设计在 16 G 内存的机器上一个角就要十几分钟，
+# 加上前面的综合、布局、布线，一条流程放不进一台机器的六小时。超时的那一次构件照样留着，交给这一条。
+# 跑完留下的东西与 asic.yml 相同，另加一份 ecc-report.json（息壤从工作区里取的单元数、面积、时序与各步的状态）。
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: 哪个流片仓，如 to2610-router
+        required: true
+      run:
+        description: 没走完的那一次后端的 run id（asic.yml 或这一条的都行）
+        required: true
+      ecc:
+        description: ecc 的版本，要与那一次的相同
+        default: v0.1.0-alpha.12
+      xirang-ref:
+        description: 息壤的分支或标签
+        default: main
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  resume:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 355
+    steps:
+      - name: 加交换区
+        run: |
+          sudo fallocate -l 40G /mnt/xr.swap
+          sudo chmod 600 /mnt/xr.swap
+          sudo mkswap -q /mnt/xr.swap
+          sudo swapon /mnt/xr.swap
+          free -g
+          df -h /mnt | tail -n 1
+
+      - name: 取整包并解开
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sudo mkdir -p /mnt/w
+          sudo chown "$USER" /mnt/w
+          gh run download "${{ inputs.run }}" -R "Tape-Out/${{ inputs.repo }}" -n "asic-${{ inputs.repo }}-rtl2gds" -D /mnt/w/dl
+          tar --zstd -xf "$(find /mnt/w/dl -name '*.tar.zst' | head -n 1)" -C /mnt/w
+          rm -rf /mnt/w/dl
+          # 工作区里记的是当时的绝对路径
+          sudo mkdir -p /tmp/asic
+          sudo mount --bind /mnt/w/asic /tmp/asic
+          du -sh /tmp/asic
+          python3 -c "import json;[print(s['name'], s.get('state')) for s in json.load(open('/tmp/asic/default/home/flow.json'))['steps']]"
+
+      - name: 装 ecc、综合工具与 PDK
+        run: |
+          curl -fsSL "https://release.openecos.com/installers/ecc/${{ inputs.ecc }}/ecc-installer.sh" \
+            | sh -s -- --with-toolchain --download-source github
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/ecc" version
+          git clone -q --depth 1 --branch "${{ inputs.xirang-ref }}" https://github.com/Tape-Out/xirang /tmp/xirang
+          sudo apt-get install -y -q python3-yaml > /dev/null
+
+      - name: 接着跑
+        shell: bash
+        run: |
+          ( while sleep 120; do
+              echo "[$(date +%T)] $(free -m | awk 'NR==2{printf "内存 %d MB ", $3} NR==3{printf "交换 %d MB", $3}') 步骤：$(ls -t /tmp/asic/default 2>/dev/null | head -n 3 | xargs)"
+            done ) &
+          timeout -k 60 320m python3 - <<'EOF' 2>&1 | tee /tmp/resume.log
+          import json, os, pathlib, subprocess, sys, tomllib
+          sys.path[:0] = [str(p) for p in pathlib.Path("/tmp/xirang/packages").glob("*/src")]
+          from xirang_back import asic as back
+
+          out = pathlib.Path("/tmp/asic")
+          env = dict(os.environ)
+          if (cad := back.oss_cad()) is not None:
+              env["CHIPCOMPILER_OSS_CAD_DIR"] = cad
+          cmd = ["ecc", "run", "--workspace", back.WORKSPACE]
+          r = subprocess.run([*cmd, "--resume"], cwd=out, env=env)
+          # 等价比对没证完时 ecc 停在那一步：照 ran asic 的做法从它后面那一步接着跑
+          for _ in range(4):
+              nxt = back._after_unproven(out)
+              if nxt is None:
+                  break
+              r = subprocess.run([*cmd, "--from", nxt], cwd=out, env=env)
+          top = tomllib.loads((out / "ecc.toml").read_text(encoding="utf-8"))["design"]["top"]
+          rep = back.ecc_report(out, top)
+          (out / "ecc-report.json").write_text(json.dumps(rep, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+          for s in rep.get("steps", []):
+              print(s["name"], s["state"], s.get("runtime"))
+          print(json.dumps({k: rep.get(k) for k in ("ok", "cells", "area_um2", "timing", "checklist", "lec")}, ensure_ascii=False))
+          sys.exit(0 if rep.get("ok") else 1)
+          EOF
+
+      - name: 交付件
+        if: always()
+        run: |
+          mkdir -p /mnt/w/deliver
+          cd /tmp/asic
+          cp /tmp/resume.log ran-resume.log 2>/dev/null || true
+          if [ -d default/Harden_ecc ]; then
+            ecc signoff export --workspace default -o /mnt/w/deliver/signoff.tar.gz --plain \
+              || ecc signoff inspect --workspace default > /mnt/w/deliver/signoff-inspect.txt 2>&1 || true
+            ls default/filler_ecc/output default/Harden_ecc/output 2>/dev/null || true
+            cp -f default/filler_ecc/output/*.def.gz /mnt/w/deliver/final.def.gz 2>/dev/null || true
+            cp -f default/filler_ecc/output/*.v.gz /mnt/w/deliver/final.v.gz 2>/dev/null || true
+            cp -f default/Harden_ecc/output/*.lef default/Harden_ecc/output/*.lib /mnt/w/deliver/ 2>/dev/null || true
+          fi
+          cp -f ./*.v report.json ecc-report.json ecc.toml ran-asic.log ran-resume.log /mnt/w/deliver/ 2>/dev/null || true
+          find default -type f \( -name '*.log' -o -name '*.rpt' -o -name '*.json' -o -name '*.txt' \) -size -8M -print0 \
+            | tar --zstd -cf /mnt/w/deliver/logs.tar.zst --null -T - 2>/dev/null || true
+          ls -la /mnt/w/deliver
+          tar --zstd -cf /mnt/w/asic.tar.zst -C /mnt/w asic 2>/dev/null || true
+          ls -la /mnt/w/asic.tar.zst || true
+
+      - name: 留下交付件
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: deliver-${{ inputs.repo }}-rtl2gds
+          path: /mnt/w/deliver
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: 留下构件
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: asic-${{ inputs.repo }}-rtl2gds
+          path: /mnt/w/asic.tar.zst
+          compression-level: 0
+          retention-days: 30
+          if-no-files-found: warn
