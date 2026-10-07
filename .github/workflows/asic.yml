@@ -170,7 +170,7 @@ jobs:
       # 布线后的时序分析要十来个 G，托管机只有 15 G 内存：不加交换区的话整台机器被收走，连构件都留不下
       - name: 加交换区
         run: |
-          sudo fallocate -l 24G /mnt/xr.swap
+          sudo fallocate -l 40G /mnt/xr.swap
           sudo chmod 600 /mnt/xr.swap
           sudo mkswap -q /mnt/xr.swap
           sudo swapon /mnt/xr.swap
