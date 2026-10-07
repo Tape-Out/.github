@@ -14,6 +14,12 @@ on:
       run:
         description: 没走完的那一次后端的 run id（asic.yml 或这一条的都行）
         required: true
+      where:
+        description: 那一次在哪个仓里跑的；空着就是 repo。接着这一条上一次的，写 .github
+        default: ""
+      from:
+        description: 从哪一步重新跑（如 drc），它前面没做完的几步记成跳过；空着就从没做完的那一步接着跑
+        default: ""
       ecc:
         description: ecc 的版本，要与那一次的相同
         default: v0.1.0-alpha.12
@@ -45,7 +51,7 @@ jobs:
         run: |
           sudo mkdir -p /mnt/w
           sudo chown "$USER" /mnt/w
-          gh run download "${{ inputs.run }}" -R "Tape-Out/${{ inputs.repo }}" -n "asic-${{ inputs.repo }}-rtl2gds" -D /mnt/w/dl
+          gh run download "${{ inputs.run }}" -R "Tape-Out/${{ inputs.where || inputs.repo }}" -n "asic-${{ inputs.repo }}-rtl2gds" -D /mnt/w/dl
           tar --zstd -xf "$(find /mnt/w/dl -name '*.tar.zst' | head -n 1)" -C /mnt/w
           rm -rf /mnt/w/dl
           # 工作区里记的是当时的绝对路径
@@ -65,6 +71,8 @@ jobs:
 
       - name: 接着跑
         shell: bash
+        env:
+          FROM: ${{ inputs.from }}
         run: |
           ( while sleep 120; do
               echo "[$(date +%T)] $(free -m | awk 'NR==2{printf "内存 %d MB ", $3} NR==3{printf "交换 %d MB", $3}') 步骤：$(ls -t /tmp/asic/default 2>/dev/null | head -n 3 | xargs)"
@@ -79,7 +87,17 @@ jobs:
           if (cad := back.oss_cad()) is not None:
               env["CHIPCOMPILER_OSS_CAD_DIR"] = cad
           cmd = ["ecc", "run", "--workspace", back.WORKSPACE]
-          r = subprocess.run([*cmd, "--resume"], cwd=out, env=env)
+          steps = json.loads((out / "default/home/flow.json").read_text(encoding="utf-8"))["steps"]
+          names = [s["name"] for s in steps]
+          skipped = []
+          if frm := os.environ.get("FROM", ""):
+              if frm not in names:
+                  sys.exit(f"流程里没有 {frm} 这一步：{names}")
+              skipped = [s["name"] for s in steps[:names.index(frm)] if s.get("state") != "Success"]
+              print("跳过：", skipped)
+              r = subprocess.run([*cmd, "--from", frm], cwd=out, env=env)
+          else:
+              r = subprocess.run([*cmd, "--resume"], cwd=out, env=env)
           # 等价比对没证完时 ecc 停在那一步：照 ran asic 的做法从它后面那一步接着跑
           for _ in range(4):
               nxt = back._after_unproven(out)
@@ -88,10 +106,14 @@ jobs:
               r = subprocess.run([*cmd, "--from", nxt], cwd=out, env=env)
           top = tomllib.loads((out / "ecc.toml").read_text(encoding="utf-8"))["design"]["top"]
           rep = back.ecc_report(out, top)
+          if skipped:
+              soft = {x["step"] for x in rep.get("lec", [])} | set(skipped)
+              rep["skipped"] = skipped
+              rep["ok"] = bool(rep.get("steps")) and all(s["state"] == "Success" or s["name"] in soft for s in rep["steps"])
           (out / "ecc-report.json").write_text(json.dumps(rep, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
           for s in rep.get("steps", []):
               print(s["name"], s["state"], s.get("runtime"))
-          print(json.dumps({k: rep.get(k) for k in ("ok", "cells", "area_um2", "timing", "checklist", "lec")}, ensure_ascii=False))
+          print(json.dumps({k: rep.get(k) for k in ("ok", "cells", "area_um2", "timing", "checklist", "lec", "skipped")}, ensure_ascii=False))
           sys.exit(0 if rep.get("ok") else 1)
           EOF
 
@@ -104,11 +126,12 @@ jobs:
           if [ -d default/Harden_ecc ]; then
             ecc signoff export --workspace default -o /mnt/w/deliver/signoff.tar.gz --plain \
               || ecc signoff inspect --workspace default > /mnt/w/deliver/signoff-inspect.txt 2>&1 || true
-            ls default/filler_ecc/output default/Harden_ecc/output 2>/dev/null || true
-            cp -f default/filler_ecc/output/*.def.gz /mnt/w/deliver/final.def.gz 2>/dev/null || true
-            cp -f default/filler_ecc/output/*.v.gz /mnt/w/deliver/final.v.gz 2>/dev/null || true
             cp -f default/Harden_ecc/output/*.lef default/Harden_ecc/output/*.lib /mnt/w/deliver/ 2>/dev/null || true
           fi
+          # 最终的 DEF 与门级网表在 filler 那一步就有了，没走到 Harden 也照拷
+          ls default/filler_ecc/output default/Harden_ecc/output 2>/dev/null || true
+          cp -f default/filler_ecc/output/*.def.gz /mnt/w/deliver/final.def.gz 2>/dev/null || true
+          cp -f default/filler_ecc/output/*.v.gz /mnt/w/deliver/final.v.gz 2>/dev/null || true
           cp -f ./*.v report.json ecc-report.json ecc.toml ran-asic.log ran-resume.log /mnt/w/deliver/ 2>/dev/null || true
           find default -type f \( -name '*.log' -o -name '*.rpt' -o -name '*.json' -o -name '*.txt' \) -size -8M -print0 \
             | tar --zstd -cf /mnt/w/deliver/logs.tar.zst --null -T - 2>/dev/null || true
