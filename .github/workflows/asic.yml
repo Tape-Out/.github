@@ -47,6 +47,14 @@ on:
         description: 要 sv2v 就写发布版本（如 v0.0.13）；空着不装
         type: string
         default: ""
+      from-run:
+        description: 后端已在别处跑完（多半是一次六小时没走完、由 resume.yml 接完的）：给那一次的 run id，这里不再跑后端，只取它的交付件跑门级冒烟
+        type: string
+        default: ""
+      from-where:
+        description: from-run 那一次在哪个仓里跑的
+        type: string
+        default: .github
 
 permissions:
   contents: read
@@ -177,6 +185,7 @@ jobs:
           free -g
 
       - name: 后端
+        if: inputs.from-run == ''
         shell: bash
         run: |
           cd /tmp/ws
@@ -188,8 +197,20 @@ jobs:
             done ) &
           timeout -k 60 320m python3 -m xirang.cli asic "$N" --flow "${{ inputs.flow }}" -o /tmp/asic 2>&1 | tee /tmp/asic.log
 
+      # 只跑门级冒烟：网表取那一次的交付件，引脚表与测试台要的 report.json 由 --no-run 现出
+      - name: 取已有的交付件
+        if: inputs.from-run != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd /tmp/ws
+          N="$(basename "$GITHUB_REPOSITORY")"
+          gh run download "${{ inputs.from-run }}" -R "Tape-Out/${{ inputs.from-where }}" -n "deliver-$N-rtl2gds" -D /tmp/deliver
+          ls -la /tmp/deliver
+          python3 -m xirang.cli asic "$N" --no-run -o /tmp/asic
+
       - name: 结果
-        if: always()
+        if: always() && inputs.from-run == ''
         run: |
           S="$GITHUB_STEP_SUMMARY"
           if [ -s /tmp/asic/report.json ]; then
@@ -210,7 +231,7 @@ jobs:
       # 交付要的只是几样小东西：展平的 .v、报告、ecc.toml、签核包，外加各步的日志与报表（后端挂了靠它们看原因）。
       # 整个输出目录有六百多兆，从流水线取回来要半小时以上，所以这几样单独留一份
       - name: 交付件
-        if: always()
+        if: always() && inputs.from-run == ''
         run: |
           mkdir -p /tmp/deliver
           cd /tmp/asic 2>/dev/null || exit 0
@@ -231,7 +252,7 @@ jobs:
           ls -la /tmp/deliver
 
       - name: 留下交付件
-        if: always()
+        if: always() && inputs.from-run == ''
         uses: actions/upload-artifact@v7
         with:
           name: deliver-${{ github.event.repository.name }}-${{ inputs.flow }}
@@ -240,7 +261,7 @@ jobs:
           if-no-files-found: warn
 
       - name: 留下构件
-        if: always()
+        if: always() && inputs.from-run == ''
         uses: actions/upload-artifact@v7
         with:
           name: asic-${{ github.event.repository.name }}-${{ inputs.flow }}
