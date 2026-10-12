@@ -55,6 +55,10 @@ on:
         description: from-run 那一次在哪个仓里跑的
         type: string
         default: .github
+      dep-refs:
+        description: 依赖取哪个分支（空格分隔的 仓=分支），没写到的取各仓的默认分支。与 ip.yml 的同名输入一样用
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -143,14 +147,18 @@ jobs:
 
       # 与 ip.yml 同一段：清单里的依赖与实例，再往下一层
       - name: 拉依赖
+        env:
+          DEP_REFS: ${{ inputs.dep-refs }}
         run: |
           mkdir -p /tmp/ws
           ln -s "$GITHUB_WORKSPACE" "/tmp/ws/$(basename "$GITHUB_REPOSITORY")"
           # 依赖与实例用到的包逐层取到头：流片仓可以依赖另一颗流片仓，那一颗自己还有实例。
-          # 黑盒的源码在它自己的子模块里，不连子模块一起取就展不开
+          # 黑盒的源码在它自己的子模块里，不连子模块一起取就展不开。
+          # dep-refs 点了名的依赖取指定的分支，取不到就停；点了名却没人依赖的也停，免得写错了名字还照跑
           python3 - <<'EOF'
-          import pathlib, subprocess, yaml
+          import os, pathlib, subprocess, yaml
           ws = pathlib.Path("/tmp/ws")
+          refs = dict(p.split("=", 1) for p in os.environ.get("DEP_REFS", "").split())
           seen, todo = set(), [p.name for p in ws.iterdir()]
           while todo:
               n = todo.pop()
@@ -158,14 +166,19 @@ jobs:
                   continue
               seen.add(n)
               if not (ws / n).exists():
-                  subprocess.run(["git", "clone", "--depth", "1", "--recurse-submodules", "--shallow-submodules",
-                                  f"https://github.com/Tape-Out/{n}", str(ws / n)])
+                  subprocess.run(["git", "clone", "--depth", "1", *(["--branch", refs[n]] if n in refs else []),
+                                  "--recurse-submodules", "--shallow-submodules",
+                                  f"https://github.com/Tape-Out/{n}", str(ws / n)], check=n in refs)
               y = ws / n / "ip.yaml"
               if y.exists():
                   d = yaml.safe_load(y.read_text(encoding="utf-8")) or {}
                   todo += list(d.get("deps") or {}) + [i["of"] for i in d.get("instances") or []]
+          if set(refs) - seen:
+              raise SystemExit(f"dep-refs 里这几个没人依赖：{sorted(set(refs) - seen)}")
           EOF
-          ls /tmp/ws
+          for d in /tmp/ws/*/; do
+            echo "$(basename "$d") $(git -C "$d" rev-parse --short HEAD 2> /dev/null || echo 不是仓)"
+          done
 
       - name: 装 ecc、综合工具与 PDK
         run: |
