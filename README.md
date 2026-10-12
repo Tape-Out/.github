@@ -9,9 +9,14 @@ bus-neutral contracts in [`hwcore`](https://github.com/Tape-Out/hwcore), assembl
 [`xirang`](https://github.com/Tape-Out/xirang). Maturity runs `planned` -> `simulated` ->
 `fpga-proven` -> `asic-ready` -> `silicon-proven`.
 
-## Status
+## What is here
 
-Planned. The entry in [`index`](https://github.com/Tape-Out/index) tracks what lands when.
+| Path | What |
+|:--:|:--:|
+| [`.github/workflows`](.github/workflows) | `ip.yml`, the pipeline every repository calls; `asic.yml` and `resume.yml`, the backend of a tape-out design and its continuation past the six-hour limit |
+| `.github/ISSUE_TEMPLATE`, `.github/pull_request_template.md` | the forms issues and pull requests start from |
+| `.github/CODEOWNERS` | who reviews what |
+| `profile` | the organisation's front page |
 
 ## License
 

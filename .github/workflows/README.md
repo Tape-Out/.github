@@ -38,3 +38,30 @@ jobs:
 
 ECC, the synthesis tools and the ICS55 PDK come from the installer ECOS publishes; the `ecc`
 input selects its version.
+
+A hosted runner gives a job six hours. `resume.yml` picks up a backend run that hit that
+limit: it takes the run's artifact and continues from the step that was not finished, or
+from the step named in `from`.
+
+A test that does not fit one job runs as a relay in `ip.yml`: `keep` leaves a directory of
+the repository as an artifact, `restore` brings it back in a later job of the same run,
+`stage` and `from` name the legs, and `tasks` runs the listed tasks instead of the matrix.
+`to2610-soc` boots Linux on its netlist this way.
+
+`dep-refs`, in both `ip.yml` and `asic.yml`, takes dependencies from a branch instead of
+their default one, as `repo=branch` pairs. It is for a run started by hand: a chip is
+tested against a change in a dependency before that change is merged. Every job prints
+the commit it took of each dependency.
+
+```yaml
+on:
+  workflow_dispatch:
+    inputs:
+      dep_refs:
+        default: ''
+jobs:
+  ip:
+    uses: Tape-Out/.github/.github/workflows/ip.yml@main
+    with:
+      dep-refs: ${{ inputs.dep_refs }}
+```
