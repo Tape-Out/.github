@@ -20,6 +20,9 @@ on:
       from:
         description: 从哪一步重新跑（如 drc），它前面没做完的几步记成跳过；空着就从没做完的那一步接着跑
         default: ""
+      signoff:
+        description: 时序分析只算哪几组工艺角，JSON，如 {"MAX":["RCworst"],"MIN":["RCbest"]}；空着是 ecc 默认的十三组。写了就从时序分析重新跑
+        default: ""
       ecc:
         description: ecc 的版本，要与那一次的相同
         default: v0.1.0-alpha.12
@@ -73,6 +76,7 @@ jobs:
         shell: bash
         env:
           FROM: ${{ inputs.from }}
+          SIGNOFF: ${{ inputs.signoff }}
         run: |
           ( while sleep 120; do
               echo "[$(date +%T)] $(free -m | awk 'NR==2{printf "内存 %d MB ", $3} NR==3{printf "交换 %d MB", $3}') 步骤：$(ls -t /tmp/asic/default 2>/dev/null | head -n 3 | xargs)"
@@ -90,6 +94,12 @@ jobs:
           steps = json.loads((out / "default/home/flow.json").read_text(encoding="utf-8"))["steps"]
           names = [s["name"] for s in steps]
           skipped = []
+          # 十三组工艺角在十几万单元的设计上一台机器的时限里算不完：只算点名的几组。
+          # ecc 把时序分析与它后面的各步标成待跑，--resume 就从时序分析接
+          signoff = json.loads(os.environ.get("SIGNOFF") or "null")
+          if signoff:
+              subprocess.run(["ecc", "param", "set", "sta.signoff", json.dumps([signoff]),
+                              "--workspace", back.WORKSPACE, "--plain"], cwd=out, env=env, check=True)
           if frm := os.environ.get("FROM", ""):
               if frm not in names:
                   sys.exit(f"流程里没有 {frm} 这一步：{names}")
@@ -106,6 +116,8 @@ jobs:
               r = subprocess.run([*cmd, "--from", nxt], cwd=out, env=env)
           top = tomllib.loads((out / "ecc.toml").read_text(encoding="utf-8"))["design"]["top"]
           rep = back.ecc_report(out, top)
+          if signoff:
+              rep["signoff"] = signoff
           if skipped:
               soft = {x["step"] for x in rep.get("lec", [])} | set(skipped)
               rep["skipped"] = skipped
