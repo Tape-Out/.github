@@ -20,6 +20,9 @@ on:
       from:
         description: 从哪一步重新跑（如 drc），它前面没做完的几步记成跳过；空着就从没做完的那一步接着跑
         default: ""
+      to:
+        description: 跑到哪一步为止（含），与 from 成对给；只想另算一遍时序分析时两个都写 sta
+        default: ""
       signoff:
         description: 时序分析只算哪几组工艺角，JSON，如 {"MAX":["RCworst"],"MIN":["RCbest"]}；空着是 ecc 默认的十三组。写了就从时序分析重新跑
         default: ""
@@ -76,6 +79,7 @@ jobs:
         shell: bash
         env:
           FROM: ${{ inputs.from }}
+          TO: ${{ inputs.to }}
           SIGNOFF: ${{ inputs.signoff }}
         run: |
           ( while sleep 120; do
@@ -100,16 +104,19 @@ jobs:
           if signoff:
               subprocess.run(["ecc", "param", "set", "sta.signoff", json.dumps([signoff]),
                               "--workspace", back.WORKSPACE, "--plain"], cwd=out, env=env, check=True)
-          if frm := os.environ.get("FROM", ""):
+          frm, to = os.environ.get("FROM", ""), os.environ.get("TO", "")
+          if to and (frm not in names or to not in names):
+              sys.exit(f"to 要与 from 成对给，都得是流程里的步骤：{names}")
+          if frm:
               if frm not in names:
                   sys.exit(f"流程里没有 {frm} 这一步：{names}")
               skipped = [s["name"] for s in steps[:names.index(frm)] if s.get("state") != "Success"]
               print("跳过：", skipped)
-              r = subprocess.run([*cmd, "--from", frm], cwd=out, env=env)
+              r = subprocess.run([*cmd, "--from", frm, *(["--to", to] if to else [])], cwd=out, env=env)
           else:
               r = subprocess.run([*cmd, "--resume"], cwd=out, env=env)
           # 等价比对没证完时 ecc 停在那一步：照 ran asic 的做法从它后面那一步接着跑
-          for _ in range(4):
+          for _ in range(0 if to else 4):
               nxt = back._after_unproven(out)
               if nxt is None:
                   break
@@ -118,7 +125,11 @@ jobs:
           rep = back.ecc_report(out, top)
           if signoff:
               rep["signoff"] = signoff
-          if skipped:
+          if to:
+              # 只跑了一段：成不成只看这一段，报告里记下是哪几步
+              rep["only"] = names[names.index(frm):names.index(to) + 1]
+              rep["ok"] = all(s["state"] == "Success" for s in rep.get("steps", []) if s["name"] in rep["only"])
+          if skipped and not to:
               soft = {x["step"] for x in rep.get("lec", [])} | set(skipped)
               rep["skipped"] = skipped
               rep["ok"] = bool(rep.get("steps")) and all(s["state"] == "Success" or s["name"] in soft for s in rep["steps"])
